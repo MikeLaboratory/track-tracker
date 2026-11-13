@@ -21,7 +21,8 @@ enum TrackTrackerApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     private static let folderKey = "projectsFolder"
-    private static let background = NSColor(red: 0x12 / 255, green: 0x12 / 255, blue: 0x14 / 255, alpha: 1)
+    // stesso colore della barra laterale della pagina: la barra del titolo ci si fonde
+    private static let background = NSColor(srgbRed: 0x11 / 255, green: 0x11 / 255, blue: 0x13 / 255, alpha: 1)
 
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -59,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = "Track Tracker"
+        window.titleVisibility = .hidden  // il nome è già nella barra laterale
+        window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 820, height: 560)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = Self.background
@@ -215,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let action = button.map { "<p><a href=\"tracktracker:action\">\(esc($0))</a></p>" } ?? ""
         let html = """
         <!DOCTYPE html><html><head><meta charset="utf-8"><style>
-        body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#121214;
+        body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#111113;
         color:#ececf0;font:14px/1.5 -apple-system,sans-serif;text-align:center}
         div{max-width:560px;padding:24px}h1{font-size:20px;margin:0 0 10px}
         pre{white-space:pre-wrap;color:#8d8d96;font:12px/1.5 ui-monospace,monospace;text-align:left}

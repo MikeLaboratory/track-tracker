@@ -66,7 +66,8 @@ NAME_RULES = [
 ]
 STRIP_END = re.compile(
     r"(?i)[\s_\-–]+(project|da[ _]?mixare|to[ _]?mix|mixdown|blocked|bloccat[ao]|"
-    r"master(ed)?|finit[ao]|done|finished|released|rilasciat[ao]|idea|sketch|bozza|wip)$")
+    r"master(ed)?|finit[ao]|done|finished|released|rilasciat[ao]|idea|sketch|bozza|wip|"
+    r"arrang(iamento)?|stuck)$")
 RELEASE_DIR = re.compile(r"(?i)released|rilasciat[ea]|uscit[ea]")
 
 LOCK = threading.Lock()
@@ -332,16 +333,20 @@ def update_project(body):
             if field in body:
                 entry[field] = str(body[field])[:20000]
         if "status" in body:
-            if body["status"] not in STATUS_KEYS:
+            status = body["status"] or ""  # "" = torna allo stato dedotto dal nome
+            if status and status not in STATUS_KEYS:
                 raise ValueError("Stato non valido")
-            entry["status"] = body["status"]
+            if status:
+                entry["status"] = status
+            else:
+                entry.pop("status", None)
         save_data(DATA)
+    p = scan()[pid]
     if "status" in body and DATA["settings"].get("finder_tags"):
         try:
-            apply_status_tag(projects[pid]["path"], body["status"])
+            apply_status_tag(p["path"], p["status"])
         except Exception as e:
             warning = f"Tag Finder non applicato: {e}"
-    p = scan()[pid]
     return {"project": p, "warning": warning}
 
 
@@ -529,96 +534,279 @@ HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Track Tracker</title>
 <style>
-:root{--bg:#121214;--panel:#1c1c1f;--panel2:#26262a;--line:#333338;--text:#ececf0;--mute:#8d8d96;
---idea:#8e8e93;--wip:#0a84ff;--arrangiamento:#bf5af2;--mix:#ff9f0a;--master:#ffd60a;--bloccata:#ff453a;--finita:#30d158;--rilasciata:#64d2ff}
+:root{--bg:#141416;--side:#111113;--raise:#1c1c20;--card:#202024;--card2:#26262b;--line:#2a2a30;--line2:#3a3a42;
+--text:#ececf0;--soft:#cfcfd6;--mute:#9a9aa3;--dim:#64646d;--accent:#0a84ff;--warn:#ffb340;
+--idea:#8e8e93;--wip:#0a84ff;--arrangiamento:#bf5af2;--mix:#ff9f0a;--master:#ffd60a;--bloccata:#ff453a;--finita:#30d158;--rilasciata:#64d2ff;
+--shadow:0 12px 32px #0009,0 2px 8px #0006;color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",Helvetica,Arial,sans-serif}
-header{position:sticky;top:0;z-index:5;background:rgba(18,18,20,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:14px 20px}
-.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-h1{font-size:18px;margin:0 8px 0 0;letter-spacing:.3px}
-h1 span{color:var(--mute);font-weight:400;font-size:13px;margin-left:6px}
-input,select,textarea,button{font:inherit;color:inherit}
-.search{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:220px}
-.btn{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
-.btn:hover{border-color:#55555c}
-.btn.on{background:#e9e9ee;color:#111;border-color:#e9e9ee}
-.btn.primary{background:var(--wip);border-color:var(--wip);color:#fff}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.seg .btn{border:0;border-radius:0}
-.spacer{flex:1}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
-.chip{border:1px solid var(--line);border-radius:999px;padding:4px 11px;cursor:pointer;color:var(--mute);background:transparent}
-.chip.on{color:var(--text);border-color:#77777f;background:var(--panel2)}
-.chip b{font-weight:600;margin-left:4px;color:var(--text)}
-main{padding:18px 20px 40px}
-.board{display:flex;gap:12px;overflow-x:auto;align-items:flex-start;padding-bottom:10px}
-.col{flex:1 1 0;min-width:165px;background:var(--panel);border-radius:12px;border-top:3px solid var(--c);min-height:120px}
-.col.over{outline:2px dashed var(--c);outline-offset:-4px}
-.colh{display:flex;justify-content:space-between;padding:10px 12px;font-weight:600}
-.colh span{color:var(--mute);font-weight:400}
-.cards{padding:0 8px 8px;display:flex;flex-direction:column;gap:8px;min-height:60px}
-.card{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--c);border-radius:9px;padding:9px 10px;cursor:pointer}
-.card:hover{border-color:#55555c;border-left-color:var(--c)}
-.card.dragging{opacity:.4}
-.cname{font-weight:600;word-break:break-word}
-.meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;color:var(--mute);font-size:12px;align-items:center}
-.tag{background:#0003;border:1px solid var(--line);border-radius:5px;padding:0 6px}
-.stale{color:#ffb340;border-color:#ffb34055}
-.note{margin-top:6px;color:#b9b9c2;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.auto{color:var(--mute);font-size:11px;font-style:italic}
-table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:12px;overflow:hidden}
-th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
-th{color:var(--mute);font-weight:500;cursor:pointer;user-select:none;white-space:nowrap}
-tr.row{cursor:pointer}tr.row:hover td{background:var(--panel2)}
-.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--c);margin-right:7px}
-.empty{color:var(--mute);text-align:center;padding:60px 0}
-.overlay{position:fixed;inset:0;background:#000a;display:none;align-items:flex-start;justify-content:center;z-index:20;overflow:auto;padding:50px 16px}
-.overlay.show{display:flex}
-.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(620px,100%);padding:22px}
-.modal h2{margin:0 0 4px;font-size:19px;word-break:break-word}
-.path{color:var(--mute);font-size:12px;word-break:break-all}
-.lbl{color:var(--mute);font-size:12px;margin:16px 0 6px}
-.stbtns{display:flex;flex-wrap:wrap;gap:6px}
-.stbtn{border:1px solid var(--line);background:transparent;border-radius:8px;padding:6px 10px;cursor:pointer}
-.stbtn.on{background:var(--c);border-color:var(--c);color:#111;font-weight:600}
-textarea{width:100%;min-height:150px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;resize:vertical}
-.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.field{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-.actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;align-items:center}
-.saved{color:var(--finita);font-size:12px;opacity:0;transition:opacity .3s}
-.saved.show{opacity:1}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;padding:10px 16px;border-radius:10px;display:none;z-index:30;max-width:90%}
-.facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.fact{background:var(--panel2);border-radius:8px;padding:6px 10px;font-size:12px}
-.fact b{display:block;font-size:15px}
-</style></head><body>
-<header>
-  <div class="top">
-    <h1>Track Tracker<span id="count"></span></h1>
-    <input class="search" id="q" placeholder="Cerca traccia o note…">
-    <div class="seg"><button class="btn" data-view="board">Board</button><button class="btn" data-view="list">Lista</button></div>
-    <button class="chip" id="staleBtn">⏳ Solo ferme</button>
-    <div class="spacer"></div>
-    <button class="btn" id="reload">⟳ Aggiorna</button>
-    <button class="btn" id="settingsBtn">⚙︎</button>
-  </div>
-  <div class="chips" id="aliases"></div>
-</header>
-<main id="main"></main>
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0;text-align:inherit}
+svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:#ffffff1c;border-radius:10px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:#ffffff30}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr);height:100vh}
 
-<div class="overlay" id="ov"><div class="modal" id="modal"></div></div>
+/* barra laterale */
+.side{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.brand{display:flex;align-items:center;gap:10px;padding:16px 16px 14px;font-weight:650;font-size:15px;letter-spacing:.2px}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(180deg,#2c2c34,#111114);display:grid;place-items:center;box-shadow:inset 0 0 0 1px #ffffff17,0 2px 6px #0007}
+.logo svg{width:20px;height:20px;stroke-width:2.3}
+.stackbar{display:flex;gap:2px;height:6px;margin:0 16px 6px;border-radius:3px;overflow:hidden;background:#ffffff0c}
+.stackbar span{background:var(--c);min-width:3px}
+.stackinfo{margin:0 16px 4px;color:var(--dim);font-size:11.5px}
+.navs{flex:1;overflow:auto;padding:0 8px 12px}
+.sec{margin:16px 9px 5px;color:var(--dim);font-size:10.5px;font-weight:650;letter-spacing:.8px;text-transform:uppercase}
+.nav{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:7px;color:var(--soft)}
+.nav:hover{background:#ffffff0a}
+.nav.on{background:#ffffff18;color:#fff}
+.nav .nt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav .nc{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.nav.on .nc{color:var(--mute)}
+.nav svg{color:var(--mute)}
+.nav.stale svg{color:var(--warn)}
+.nav .dot{margin:0 4px}
+.side-foot{border-top:1px solid var(--line);padding:9px 8px 9px 14px;display:flex;align-items:center;gap:8px;color:var(--mute);font-size:12px}
+.side-foot .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* contenuto */
+.content{display:flex;flex-direction:column;min-width:0;min-height:0;transition:margin-right .22s cubic-bezier(.2,.8,.2,1)}
+.toolbar{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.ttl{display:flex;align-items:baseline;gap:9px;min-width:0;margin-right:auto}
+.ttl h1{font-size:17px;margin:0;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ttl span{color:var(--mute);font-size:12px;white-space:nowrap}
+.search{position:relative;display:flex;align-items:center}
+.search svg{position:absolute;left:9px;color:var(--dim);pointer-events:none}
+.search input{width:250px;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 44px 6px 30px;outline:none;transition:border-color .15s,box-shadow .15s}
+.search input::placeholder{color:var(--dim)}
+.search kbd{position:absolute;right:8px;color:var(--dim);font:11px -apple-system,sans-serif;border:1px solid var(--line2);border-radius:4px;padding:0 4px;pointer-events:none}
+.search input:focus,.field:focus,textarea:focus,.dd:focus{border-color:var(--accent);box-shadow:0 0 0 3px #0a84ff30}
+.dd{background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 8px;outline:none}
+.seg{display:inline-flex;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg button{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;color:var(--mute)}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:#ffffff1d;color:#fff}
+.ib{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:7px;color:var(--mute);flex:none}
+.ib:hover{background:#ffffff14;color:var(--text)}
+.ib.sm{width:24px;height:24px;border-radius:6px}
+.ib.sm svg{width:14px;height:14px}
+main{flex:1;min-height:0;overflow:auto;padding:16px 18px 18px}
+main.board{overflow-y:hidden}
+main.list{padding-top:0}
+
+/* board */
+.board-w{display:flex;gap:12px;height:100%;align-items:stretch}
+.col{flex:1 0 256px;max-width:360px;display:flex;flex-direction:column;background:#ffffff05;border:1px solid var(--line);border-radius:12px;min-height:0;box-shadow:inset 0 2px 0 var(--c);transition:background .15s,border-color .15s}
+.col.over{background:#ffffff0e;border-color:var(--c)}
+.colh{display:flex;align-items:center;gap:8px;padding:11px 8px 8px 13px;font-weight:600}
+.colh .ct{flex:1}
+.n{color:var(--dim);font-weight:500;font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
+.cards{flex:1;overflow-y:auto;padding:2px 8px 10px;display:flex;flex-direction:column;gap:8px}
+.col-empty{color:var(--dim);font-size:12px;text-align:center;border:1px dashed var(--line2);border-radius:9px;padding:20px 8px}
+.col.collapsed{flex:0 0 46px;cursor:pointer}
+.col.collapsed:hover{background:#ffffff0c}
+.col.collapsed .colh{flex-direction:column;padding:14px 0;gap:12px}
+.vlabel{writing-mode:vertical-rl;color:var(--mute);font-weight:600;white-space:nowrap}
+
+/* card */
+.card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 10px 10px 14px;cursor:pointer;box-shadow:0 1px 2px #0005;transition:border-color .12s,background .12s}
+.card::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--c)}
+.card:hover{background:var(--card2);border-color:var(--line2)}
+.card.is-sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.card.dragging{opacity:.35}
+.c-top{display:flex;align-items:flex-start;gap:4px}
+.cname{flex:1;font-weight:600;font-size:13.5px;line-height:1.3;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.c-act{display:flex;gap:1px;margin:-4px -5px -4px 0;opacity:0;transition:opacity .12s}
+.card:hover .c-act,.card.is-sel .c-act{opacity:1}
+.meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 9px;margin-top:6px;color:var(--mute);font-size:11.5px}
+.pill{display:inline-flex;align-items:center;gap:4px;background:#ffffff0d;border:1px solid #ffffff10;border-radius:5px;padding:0 6px;font-size:11px;color:var(--soft);white-space:nowrap}
+.pill svg{width:11px;height:11px}
+.bpm{font-variant-numeric:tabular-nums;color:var(--soft)}
+.stale-b{color:var(--warn);background:#ffb34017;border-color:#ffb34030}
+.auto{color:var(--dim);font-style:italic}
+.crel{margin-top:6px;font-size:11.5px;color:var(--rilasciata)}
+.cnote{margin-top:7px;color:#b3b3bb;font-size:12px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;white-space:pre-line}
+
+/* lista */
+.tbl{width:100%;border-collapse:separate;border-spacing:0;margin-top:16px}
+.tbl th{position:sticky;top:0;z-index:1;background:var(--bg);text-align:left;font-weight:500;color:var(--mute);font-size:12px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap;user-select:none}
+.tbl th:hover{color:var(--text)}
+.tbl td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tr.row{cursor:pointer}
+.tbl tr.row:hover td{background:#ffffff07}
+.tbl tr.row.is-sel td{background:#0a84ff1e}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.rname{font-weight:600}
+.rsub{font-size:11.5px;color:var(--rilasciata);margin-top:1px}
+.mute{color:var(--mute)}
+.nowrap{white-space:nowrap}
+.spill{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.rnote{color:var(--mute);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ra{white-space:nowrap;text-align:right;width:64px}
+.ra .ib{opacity:0}
+.row:hover .ra .ib,.row.is-sel .ra .ib{opacity:1}
+
+/* pannello dettagli */
+.panel{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:100%;background:#18181b;border-left:1px solid var(--line);box-shadow:-24px 0 48px #0007;transform:translateX(104%);transition:transform .22s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column;z-index:20}
+.panel.open{transform:none}
+@media (min-width:1400px){body.panel-open .content{margin-right:400px}}
+.p-scroll{flex:1;overflow:auto;padding:18px 20px 22px}
+.p-head{display:flex;align-items:flex-start;gap:10px}
+.p-head>div{flex:1;min-width:0}
+.p-head h2{margin:3px 0 0;font-size:20px;line-height:1.25;word-break:break-word}
+.p-alias{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.7px;font-weight:650}
+.p-path{display:flex;gap:7px;align-items:flex-start;margin-top:8px;color:var(--dim);font-size:11.5px;word-break:break-all;line-height:1.4}
+.p-path:hover{color:var(--soft)}
+.p-path svg{width:13px;height:13px;margin-top:1px}
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
+.fact{background:var(--raise);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:11px;color:var(--mute)}
+.fact b{display:block;color:var(--text);font-size:15px;font-weight:600;margin-top:1px;font-variant-numeric:tabular-nums}
+.warn{display:flex;gap:8px;align-items:center;margin-top:12px;background:#ffb34012;border:1px solid #ffb34030;color:var(--warn);border-radius:9px;padding:8px 10px;font-size:12px}
+.lbl{display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px;color:var(--mute);font-size:11px;font-weight:650;letter-spacing:.6px;text-transform:uppercase}
+.hint{text-transform:none;letter-spacing:0;font-weight:400;color:var(--dim)}
+.stgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.stb{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--raise);color:var(--soft)}
+.stb:hover{border-color:var(--line2);color:var(--text)}
+.stb .k{margin-left:auto;color:var(--dim);font-size:11px;font-variant-numeric:tabular-nums}
+.stb.on{border-color:var(--c);background:#ffffff0c;color:#fff;box-shadow:inset 0 0 0 1px var(--c)}
+.autonote{margin-top:8px;font-size:12px;color:var(--dim)}
+textarea{display:block;width:100%;min-height:170px;background:var(--raise);border:1px solid var(--line);border-radius:9px;padding:10px 12px;resize:vertical;outline:none;line-height:1.5}
+textarea::placeholder,.field::placeholder{color:var(--dim)}
+.field{width:100%;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:7px 10px;outline:none}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.saved{color:var(--finita);opacity:0;transition:opacity .3s;text-transform:none;letter-spacing:0;font-weight:500}
+.saved.show{opacity:1}
+.p-foot{border-top:1px solid var(--line);padding:12px 16px 12px 20px;display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:7px;background:var(--raise);border:1px solid var(--line2);border-radius:8px;padding:7px 12px;font-weight:500;white-space:nowrap}
+.btn:hover{background:#26262c}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{background:#2391ff}
+.btn svg{width:14px;height:14px}
+.p-keys{margin-left:auto;color:var(--dim);font-size:11px;text-align:right;line-height:1.45}
+
+/* menu contestuale */
+.menu{position:fixed;z-index:50;min-width:230px;background:#232328f5;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:5px;display:none}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 9px;border-radius:6px}
+.menu button:hover{background:var(--accent);color:#fff}
+.menu button svg{width:14px;height:14px;color:var(--mute)}
+.menu button:hover svg{color:#fff}
+.menu .mh{padding:6px 9px 3px;color:var(--dim);font-size:11px;font-weight:650}
+.menu .sep{height:1px;background:var(--line2);margin:5px 4px}
+.menu .chk{margin-left:auto}
+.menu .dot{margin:0 3px}
+
+/* notifiche */
+.toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,16px);opacity:0;pointer-events:none;background:#2a2a30f5;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--line2);box-shadow:var(--shadow);border-radius:10px;padding:9px 10px 9px 14px;display:flex;align-items:center;gap:12px;z-index:60;transition:opacity .2s,transform .2s;max-width:min(560px,90vw)}
+.toast.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.toast span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast button{color:#4da3ff;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap}
+.toast button:hover{background:#ffffff12}
+
+/* impostazioni */
+.overlay{position:fixed;inset:0;background:#0009;display:none;align-items:center;justify-content:center;z-index:40;padding:20px}
+.overlay.show{display:flex}
+.modal{background:#1c1c20;border:1px solid var(--line2);border-radius:14px;width:min(500px,100%);max-height:100%;overflow:auto;padding:22px;box-shadow:var(--shadow)}
+.modal h2{margin:0 0 4px;font-size:18px}
+.small{font-size:12px;color:var(--dim);word-break:break-all}
+.inline{display:flex;align-items:center;gap:10px;color:var(--soft)}
+.check{display:flex;gap:9px;align-items:flex-start;color:var(--soft);cursor:pointer}
+.check input{margin-top:3px}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:12.5px;color:var(--soft);align-items:center}
+kbd{font:11.5px -apple-system,sans-serif;color:var(--text);background:#ffffff10;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:1px 6px;white-space:nowrap}
+.m-foot{display:flex;justify-content:flex-end;margin-top:22px}
+
+/* stati vuoti */
+.empty{height:100%;min-height:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mute);text-align:center;padding:40px}
+.empty .big{font-size:16px;color:var(--text);font-weight:600}
+.empty .small{max-width:420px}
+.empty .btn{margin-top:8px}
+.spinner{width:22px;height:22px;border:2px solid #ffffff22;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* finestre strette */
+.side-btn{display:none}
+@media (max-width:760px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .side{position:fixed;left:0;top:0;bottom:0;width:260px;z-index:30;transform:translateX(-102%);transition:transform .2s}
+  body.side-open .side{transform:none;box-shadow:var(--shadow)}
+  .side-btn{display:inline-grid}
+  .toolbar{flex-wrap:wrap;padding:10px 12px}
+  .search{order:5;flex:1 1 100%}
+  .search input{width:100%}
+  main{padding:12px}
+  .panel{width:100%}
+}
+</style></head><body>
+<div class="shell">
+  <aside class="side" id="side">
+    <div class="brand"><span class="logo"><svg viewBox="0 0 20 20"><path d="M3.5 9v2" stroke="#8e8e93"/><path d="M6.75 6.5v7" stroke="#0a84ff"/><path d="M10 3.5v13" stroke="#bf5af2"/><path d="M13.25 6v8" stroke="#ff9f0a"/><path d="M16.5 8.5v3" stroke="#30d158"/></svg></span>Track Tracker</div>
+    <div id="sideStats"></div>
+    <nav class="navs" id="nav"></nav>
+    <div class="side-foot"><span data-i="folder"></span><span class="fn" id="folder"></span><button class="ib" id="settingsBtn" title="Impostazioni e scorciatoie" data-i="gear"></button></div>
+  </aside>
+  <section class="content">
+    <header class="toolbar">
+      <button class="ib side-btn" id="sideBtn" title="Mostra filtri" data-i="menu"></button>
+      <div class="ttl"><h1 id="title">Tutte le tracce</h1><span id="count"></span></div>
+      <label class="search"><span data-i="search"></span><input id="q" placeholder="Cerca tracce e note" autocomplete="off" spellcheck="false"><kbd id="qkey">⌘F</kbd></label>
+      <select class="dd" id="sort" title="Ordina"></select>
+      <div class="seg"><button data-view="board" data-i="board"> Board</button><button data-view="list" data-i="list"> Lista</button></div>
+      <button class="ib" id="reload" title="Rileggi la cartella" data-i="refresh"></button>
+    </header>
+    <main id="main"></main>
+  </section>
+</div>
+<aside class="panel" id="panel"></aside>
+<div class="menu" id="menu"></div>
 <div class="overlay" id="ovs"><div class="modal" id="smodal"></div></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="toastBtn"></button></div>
 
 <script>
-const S={projects:[],statuses:[],settings:{},alias:'__all',q:'',staleOnly:false,
-  view:store('view')||'board',sort:{k:'mtime',dir:-1},openId:null};
-function store(k,v){try{if(v===undefined)return localStorage.getItem('tt_'+k);localStorage.setItem('tt_'+k,v)}catch(e){return null}}
+const ICON={
+ search:'<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg>',
+ board:'<svg viewBox="0 0 16 16"><rect x="1.75" y="2.5" width="3.5" height="11" rx="1"/><rect x="6.25" y="2.5" width="3.5" height="7" rx="1"/><rect x="10.75" y="2.5" width="3.5" height="9" rx="1"/></svg>',
+ list:'<svg viewBox="0 0 16 16"><path d="M5.5 4h8.5M5.5 8h8.5M5.5 12h8.5"/><path d="M2 4h.5M2 8h.5M2 12h.5"/></svg>',
+ refresh:'<svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>',
+ gear:'<svg viewBox="0 0 16 16"><path d="M2 4.5h7.5M12.5 4.5H14M2 11.5h1.5M6.5 11.5H14"/><circle cx="11" cy="4.5" r="1.5"/><circle cx="5" cy="11.5" r="1.5"/></svg>',
+ play:'<svg viewBox="0 0 16 16"><path d="M5 3.3v9.4l7.4-4.7z" fill="currentColor" stroke-width="1"/></svg>',
+ folder:'<svg viewBox="0 0 16 16"><path d="M1.75 4.5c0-.6.4-1 1-1h3.1l1.5 1.5h5.9c.6 0 1 .4 1 1v6.25c0 .6-.4 1-1 1H2.75c-.6 0-1-.4-1-1z"/></svg>',
+ more:'<svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor" stroke="none"/></svg>',
+ close:'<svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+ clock:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.75V8l2.25 1.5"/></svg>',
+ wave:'<svg viewBox="0 0 16 16"><path d="M2.5 7v2M5.25 4.5v7M8 2.5v11M10.75 5v6M13.5 7v2"/></svg>',
+ user:'<svg viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.75"/><path d="M2.75 14c.75-2.75 2.9-4.1 5.25-4.1s4.5 1.35 5.25 4.1"/></svg>',
+ users:'<svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c.6-2.4 2.4-3.6 4.5-3.6s3.9 1.2 4.5 3.6"/><path d="M10.5 3.2a2.4 2.4 0 0 1 0 4.6M12 10c1.3.4 2.2 1.4 2.5 3.5"/></svg>',
+ info:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v4"/><circle cx="8" cy="5" r=".6" fill="currentColor"/></svg>',
+ wand:'<svg viewBox="0 0 16 16"><path d="m2.5 13.5 8-8M11.5 2v2.5M11.5 7v.5M9 4.5h-.5M14.5 4.5H14"/></svg>',
+ collapse:'<svg viewBox="0 0 16 16"><path d="M10 4 6 8l4 4"/></svg>',
+ menu:'<svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>',
+};
+const MAC=/Mac|iPhone|iPad/i.test(navigator.platform||navigator.userAgent);
+const CMD=MAC?'⌘':'Ctrl+';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const label=k=>(S.statuses.find(s=>s.key===k)||{}).label||k;
+function store(k,v){try{if(v===undefined)return localStorage.getItem('tt_'+k);localStorage.setItem('tt_'+k,v)}catch(e){return null}}
+function storedSet(k){try{return new Set(JSON.parse(store(k)||'[]'))}catch(e){return new Set()}}
+const SORTS={'mtime:-1':'Più recenti','mtime:1':'Meno recenti','name:1':'Nome','bpm:-1':'BPM','status:1':'Stato'};
+const S={projects:[],statuses:[],settings:{stale_days:60},root:'',aliasN:0,loaded:false,error:'',
+  alias:'__all',filter:'all',q:'',view:store('view')==='list'?'list':'board',sort:store('sort')||'mtime:-1',
+  openId:null,menuId:null,pendingNotes:null,notesT:null,collapsed:storedSet('collapsed'),expanded:storedSet('expanded')};
+// prima apertura: "Rilasciata" fa da archivio, quindi parte compressa
+if(store('collapsed')===null)S.collapsed.add('rilasciata');
+if(!SORTS[S.sort])S.sort='mtime:-1';
 const DONE=['finita','rilasciata'];
+const label=k=>k?((S.statuses.find(s=>s.key===k)||{}).label||k):'automatico';
 const isStale=p=>!DONE.includes(p.status)&&p.days>=S.settings.stale_days;
+const byId=id=>S.projects.find(p=>p.id===id);
+const isTyping=a=>!!a&&(a.tagName==='TEXTAREA'||a.tagName==='SELECT'||(a.tagName==='INPUT'&&a.type!=='checkbox'));
+
+function ago(d){if(d<=0)return'oggi';if(d===1)return'ieri';if(d<45)return d+' giorni fa';if(d<365)return Math.round(d/30)+' mesi fa';const y=Math.floor(d/365);return y===1?'1 anno fa':y+' anni fa'}
+function fmtDate(s){const d=new Date(s+'T00:00:00');return isNaN(d)?s:d.toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'})}
+function releaseText(p){const parts=[];if(p.release_date)parts.push((new Date(p.release_date+'T00:00:00')>new Date()?'Esce il ':'Uscita il ')+fmtDate(p.release_date));if(p.label)parts.push(p.label);return parts.join(' · ')}
 
 async function api(path,body){
   const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
@@ -626,140 +814,334 @@ async function api(path,body){
   if(!r.ok)throw new Error(d.error||r.status);
   return d;
 }
-function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',3500)}
+
+let toastT;
+function toast(msg,action){
+  $('#toastMsg').textContent=msg;const b=$('#toastBtn');
+  if(action){b.textContent=action.label;b.style.display='';b.onclick=()=>{hideToast();action.fn()}}
+  else{b.style.display='none';b.onclick=null}
+  $('#toast').classList.add('show');clearTimeout(toastT);toastT=setTimeout(hideToast,action?6000:3000);
+}
+function hideToast(){$('#toast').classList.remove('show')}
 
 async function load(fresh){
-  try{const d=await api('/api/projects'+(fresh?'?fresh=1':''));Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,isMac:d.is_mac});render()}
-  catch(e){$('#main').innerHTML='<div class="empty">Errore: '+esc(e.message)+'</div>'}
+  try{
+    const d=await api('/api/projects'+(fresh?'?fresh=1':''));
+    Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,loaded:true,error:''});
+  }catch(e){S.error=e.message;S.loaded=true}
+  S.aliasN=new Set(S.projects.map(p=>p.alias)).size;
+  if(S.alias!=='__all'&&!S.projects.some(p=>p.alias===S.alias))S.alias='__all';
+  render();
+  if(S.openId){byId(S.openId)?renderPanel():closePanel()}
 }
-function ago(d){if(d<=0)return'oggi';if(d===1)return'ieri';if(d<45)return d+' g fa';if(d<365)return Math.round(d/30)+' mesi fa';const y=Math.floor(d/365);return y+(y===1?' anno fa':' anni fa')}
 
+// ------------------------------------------------------------ filtri e ordine
 function filtered(){
-  const q=S.q.toLowerCase();
-  return S.projects.filter(p=>(S.alias==='__all'||p.alias===S.alias)&&(!S.staleOnly||isStale(p))&&
-    (!q||(p.name+' '+p.folder+' '+p.notes+' '+p.label).toLowerCase().includes(q)));
+  const q=S.q.trim().toLowerCase();
+  return S.projects.filter(p=>(S.alias==='__all'||p.alias===S.alias)
+    &&(S.filter==='all'||(S.filter==='stale'?isStale(p):p.status===S.filter))
+    &&(!q||[p.name,p.folder,p.notes,p.label,p.alias].join(' ').toLowerCase().includes(q)));
+}
+function sortSpec(){const [k,d]=S.sort.split(':');return{k,dir:+d||1}}
+function sorted(list){
+  const {k,dir}=sortSpec(),order=S.statuses.map(s=>s.key);
+  const val=p=>k==='status'?order.indexOf(p.status):k==='bpm'?(p.bpm||0):k==='mtime'?p.mtime:String(p[k]||'').toLowerCase();
+  return [...list].sort((a,b)=>{const x=val(a),y=val(b);return((x>y)-(x<y))*dir||b.mtime-a.mtime});
+}
+function visibleOrder(){
+  const l=sorted(filtered());
+  if(S.view!=='board')return l;
+  const o=S.statuses.map(s=>s.key);
+  return l.sort((a,b)=>o.indexOf(a.status)-o.indexOf(b.status));
 }
 
-function render(){
+// ------------------------------------------------------------ disegno
+function render(){renderSide();renderToolbar();renderMain()}
+
+function renderSide(){
+  const inA=S.projects.filter(p=>S.alias==='__all'||p.alias===S.alias);
+  const cnt={};inA.forEach(p=>cnt[p.status]=(cnt[p.status]||0)+1);
+  const done=inA.filter(p=>DONE.includes(p.status)).length;
+  $('#sideStats').innerHTML=inA.length?`<div class="stackbar">${S.statuses.filter(s=>cnt[s.key]).map(s=>
+    `<span style="--c:var(--${s.key});flex:${cnt[s.key]}" title="${esc(s.label)}: ${cnt[s.key]}"></span>`).join('')}</div>
+    <div class="stackinfo">${done} di ${inA.length} finite o rilasciate</div>`:'';
+  const nav=(attr,icon,text,n,on,cls='')=>`<button class="nav${on?' on':''} ${cls}" ${attr}>${icon}<span class="nt">${esc(text)}</span><span class="nc">${n}</span></button>`;
+  let h='<div class="sec">Libreria</div>'
+    +nav('data-filter="all"',ICON.wave,'Tutte le tracce',inA.length,S.filter==='all')
+    +nav('data-filter="stale"',ICON.clock,'Ferme',inA.filter(isStale).length,S.filter==='stale','stale')
+    +'<div class="sec">Stati</div>'
+    +S.statuses.map(s=>nav(`data-filter="${s.key}"`,`<span class="dot" style="--c:var(--${s.key})"></span>`,s.label,cnt[s.key]||0,S.filter===s.key)).join('');
+  if(S.aliasN>1){
+    const aliases=[...new Set(S.projects.map(p=>p.alias))].sort((a,b)=>a.localeCompare(b,'it'));
+    h+='<div class="sec">Alias</div>'+nav('data-alias="__all"',ICON.users,'Tutti gli alias',S.projects.length,S.alias==='__all')
+      +aliases.map(a=>nav(`data-alias="${esc(a)}"`,ICON.user,a,S.projects.filter(p=>p.alias===a).length,S.alias===a)).join('');
+  }
+  $('#nav').innerHTML=h;
+  $('#folder').textContent=S.root.split('/').filter(Boolean).pop()||S.root||'…';
+  $('#folder').title=S.root;
+}
+
+function renderToolbar(){
+  const t=S.filter==='all'?'Tutte le tracce':S.filter==='stale'?'Tracce ferme':label(S.filter);
+  $('#title').textContent=t+(S.alias!=='__all'?' · '+S.alias:'');
+  const n=filtered().length;
+  $('#count').textContent=S.loaded?n+(n===1?' traccia':' tracce'):'';
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===S.view));
-  $('#staleBtn').classList.toggle('on',S.staleOnly);
-  const staleN=S.projects.filter(isStale).length;
-  $('#staleBtn').innerHTML='⏳ Solo ferme <b>'+staleN+'</b>';
-  const aliases=[...new Set(S.projects.map(p=>p.alias))].sort();
-  $('#aliases').innerHTML=[['__all','Tutti',S.projects.length],...aliases.map(a=>[a,a,S.projects.filter(p=>p.alias===a).length])]
-    .map(([k,l,n])=>`<button class="chip ${S.alias===k?'on':''}" data-alias="${esc(k)}">${esc(l)}<b>${n}</b></button>`).join('');
-  const list=filtered();
-  $('#count').textContent=list.length+' tracce';
-  if(!S.projects.length){$('#main').innerHTML='<div class="empty">Nessun progetto Ableton trovato in<br>'+esc(S.root)+'</div>';return}
+  $('#sort').value=SORTS[S.sort]?S.sort:'';
+}
+
+function renderMain(){
+  const m=$('#main');m.className=S.view;
+  if(!S.loaded){m.innerHTML='<div class="empty"><div class="spinner"></div>Carico i progetti…</div>';return}
+  if(S.error){m.innerHTML=`<div class="empty"><div class="big">Non riesco a leggere i progetti</div><div class="small">${esc(S.error)}</div><button class="btn" id="retry">Riprova</button></div>`;return}
+  if(!S.projects.length){m.innerHTML=`<div class="empty"><div class="big">Nessun progetto Ableton trovato</div>Cerco le cartelle che contengono un file .als dentro<div class="small">${esc(S.root)}</div></div>`;return}
+  const list=sorted(filtered());
+  if(!list.length){m.innerHTML=`<div class="empty"><div class="big">Nessuna traccia</div>Niente corrisponde ai filtri o alla ricerca.<button class="btn" id="resetF">Azzera filtri</button></div>`;return}
   S.view==='board'?renderBoard(list):renderList(list);
 }
 
-function card(p){
-  return `<div class="card" draggable="true" data-id="${esc(p.id)}" style="--c:var(--${p.status})">
-    <div class="cname">${esc(p.name)}</div>
-    <div class="meta">${S.alias==='__all'?`<span class="tag">${esc(p.alias)}</span>`:''}
-      ${p.bpm?`<span>${p.bpm} BPM</span>`:''}<span>· ${ago(p.days)}</span>
-      ${isStale(p)?`<span class="tag stale">⏳ ferma da ${p.days} g</span>`:''}
-      ${p.status_source==='auto'?'<span class="auto" title="Stato letto dal nome della cartella">auto</span>':''}</div>
-    ${p.notes?`<div class="note">📝 ${esc(p.notes.split('\n')[0])}</div>`:''}</div>`;
-}
 function renderBoard(list){
-  $('#main').innerHTML='<div class="board">'+S.statuses.map(s=>{
-    const items=list.filter(p=>p.status===s.key);
-    return `<div class="col" data-status="${s.key}" style="--c:var(--${s.key})">
-      <div class="colh">${esc(s.label)}<span>${items.length}</span></div>
-      <div class="cards">${items.map(card).join('')}</div></div>`}).join('')+'</div>';
-}
-function renderList(list){
-  const k=S.sort.k,dir=S.sort.dir,order=S.statuses.map(s=>s.key);
-  const val=p=>k==='status'?order.indexOf(p.status):k==='bpm'?(p.bpm||0):k==='mtime'?p.mtime:String(p[k]).toLowerCase();
-  list=[...list].sort((a,b)=>(val(a)>val(b)?1:val(a)<val(b)?-1:0)*dir);
-  const th=(key,l)=>`<th data-sort="${key}">${l}${S.sort.k===key?(S.sort.dir>0?' ▲':' ▼'):''}</th>`;
-  $('#main').innerHTML=list.length?`<table><tr>${th('name','Traccia')}${th('alias','Alias')}${th('status','Stato')}${th('bpm','BPM')}${th('mtime','Modificata')}<th>Note</th></tr>`+
-    list.map(p=>`<tr class="row" data-id="${esc(p.id)}" style="--c:var(--${p.status})"><td><b>${esc(p.name)}</b></td><td>${esc(p.alias)}</td>
-    <td><span class="dot"></span>${esc(label(p.status))}</td><td>${p.bpm||'–'}</td>
-    <td>${ago(p.days)}${isStale(p)?' <span class="tag stale">⏳</span>':''}</td>
-    <td style="color:var(--mute);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.notes.split('\n')[0])}</td></tr>`).join('')+'</table>'
-    :'<div class="empty">Nessuna traccia con questi filtri</div>';
+  const only=S.statuses.some(s=>s.key===S.filter);
+  $('#main').innerHTML='<div class="board-w">'+S.statuses.filter(s=>!only||s.key===S.filter).map(s=>{
+    const items=list.filter(p=>p.status===s.key),st=`style="--c:var(--${s.key})"`;
+    const collapsed=!only&&(S.collapsed.has(s.key)||(!items.length&&!S.expanded.has(s.key)));
+    if(collapsed)return `<section class="col collapsed" data-status="${s.key}" data-toggle="${s.key}" ${st} title="Espandi «${esc(s.label)}»">
+      <div class="colh"><span class="dot"></span><span class="vlabel">${esc(s.label)}</span><span class="n">${items.length}</span></div></section>`;
+    return `<section class="col" data-status="${s.key}" ${st}><div class="colh"><span class="dot"></span><span class="ct">${esc(s.label)}</span>
+      <span class="n">${items.length}</span>${only?'':`<button class="ib sm" data-toggle="${s.key}" title="Comprimi colonna">${ICON.collapse}</button>`}</div>
+      <div class="cards">${items.length?items.map(card).join(''):'<div class="col-empty">Trascina qui una traccia</div>'}</div></section>`;
+  }).join('')+'</div>';
 }
 
+function card(p){
+  const meta=[];
+  if(S.alias==='__all'&&S.aliasN>1)meta.push(`<span class="pill">${esc(p.alias)}</span>`);
+  if(p.bpm)meta.push(`<span class="bpm">${p.bpm} BPM</span>`);
+  meta.push(`<span>${ago(p.days)}</span>`);
+  if(p.versions>1)meta.push(`<span title="File .als nella cartella">${p.versions} versioni</span>`);
+  if(p.status_source==='auto')meta.push('<span class="auto" title="Stato dedotto dal nome della cartella">auto</span>');
+  const rel=releaseText(p);
+  return `<article class="card${p.id===S.openId?' is-sel':''}" draggable="true" data-id="${esc(p.id)}" style="--c:var(--${p.status})">
+    <div class="c-top"><div class="cname">${esc(p.name)}</div><div class="c-act">
+      <button class="ib sm" data-act="play" title="Apri in Ableton">${ICON.play}</button>
+      <button class="ib sm" data-act="more" title="Altre azioni">${ICON.more}</button></div></div>
+    <div class="meta">${meta.join('')}</div>
+    ${isStale(p)?`<div class="meta"><span class="pill stale-b">${ICON.clock}Ferma da ${p.days} giorni</span></div>`:''}
+    ${rel?`<div class="crel">${esc(rel)}</div>`:''}
+    ${p.notes?`<div class="cnote">${esc(p.notes)}</div>`:''}</article>`;
+}
+
+function renderList(list){
+  const {k,dir}=sortSpec(),many=S.aliasN>1;
+  const th=(key,l,cls='')=>`<th class="${cls}" data-sort="${key}">${l}${k===key?(dir>0?' ↑':' ↓'):''}</th>`;
+  $('#main').innerHTML=`<table class="tbl"><thead><tr>${th('name','Traccia')}${many?th('alias','Alias'):''}${th('status','Stato')}${th('bpm','BPM','num')}${th('mtime','Modificata')}<th>Note</th><th></th></tr></thead><tbody>`
+   +list.map(p=>{const rel=releaseText(p);return `<tr class="row${p.id===S.openId?' is-sel':''}" data-id="${esc(p.id)}" style="--c:var(--${p.status})">
+    <td><div class="rname">${esc(p.name)}</div>${rel?`<div class="rsub">${esc(rel)}</div>`:''}</td>
+    ${many?`<td class="mute">${esc(p.alias)}</td>`:''}
+    <td><span class="spill"><span class="dot"></span>${esc(label(p.status))}${p.status_source==='auto'?'<span class="auto">auto</span>':''}</span></td>
+    <td class="num">${p.bpm||'–'}</td>
+    <td class="nowrap">${ago(p.days)}${isStale(p)?` <span class="pill stale-b" title="Ferma">${ICON.clock}</span>`:''}</td>
+    <td class="rnote">${esc((p.notes||'').split('\n')[0])}</td>
+    <td class="ra"><button class="ib sm" data-act="play" title="Apri in Ableton">${ICON.play}</button><button class="ib sm" data-act="more" title="Altre azioni">${ICON.more}</button></td></tr>`}).join('')
+   +'</tbody></table>';
+}
+
+// ------------------------------------------------------------ pannello dettagli
+function renderPanel(){
+  const el=$('#panel'),p=byId(S.openId);if(!p)return closePanel();
+  const a=document.activeElement;
+  const keep=a&&el.contains(a)&&a.id?{id:a.id,v:a.value,s:a.selectionStart,e:a.selectionEnd}:null;
+  const ta=$('#notes'),notes=ta&&ta.dataset.pid===p.id?ta.value:p.notes;
+  const facts=[['BPM',p.bpm||'–'],['Modificata',ago(p.days)],['Versioni .als',p.versions]];
+  el.innerHTML=`<div class="p-scroll">
+    <div class="p-head"><div><div class="p-alias">${esc(p.alias)}</div><h2>${esc(p.name)}</h2></div>
+      <button class="ib" data-close title="Chiudi (Esc)">${ICON.close}</button></div>
+    <button class="p-path" data-act="finder" title="Mostra nel Finder">${ICON.folder}<span>${esc(p.path)}</span></button>
+    <div class="facts">${facts.map(([k,v])=>`<div class="fact">${k}<b>${esc(v)}</b></div>`).join('')}</div>
+    ${isStale(p)?`<div class="warn">${ICON.clock}Non la tocchi da ${p.days} giorni</div>`:''}
+    <div class="lbl">Stato<span class="hint">tasti 1–${S.statuses.length}</span></div>
+    <div class="stgrid">${S.statuses.map((s,i)=>`<button class="stb${p.status===s.key?' on':''}" data-st="${s.key}" style="--c:var(--${s.key})"><span class="dot"></span>${esc(s.label)}<span class="k">${i+1}</span></button>`).join('')}</div>
+    ${p.status_source==='auto'?'<div class="autonote">Stato dedotto dal nome della cartella: scegline uno per confermarlo.</div>':''}
+    <div class="lbl">Note e cose da fare<span class="saved" id="saved">Salvato ✓</span></div>
+    <textarea id="notes" data-pid="${esc(p.id)}" placeholder="Rifare il drop, kick troppo forte, mandare a…">${esc(notes)}</textarea>
+    <div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="es. Toolroom"></div>
+      <div><div class="lbl">Data di uscita</div><input class="field" type="date" id="rdate" value="${esc(p.release_date)}"></div></div>
+  </div>
+  <div class="p-foot"><button class="btn primary" data-act="play">${ICON.play}Apri in Ableton</button>
+    <button class="btn" data-act="finder">${ICON.folder}Finder</button>
+    <div class="p-keys">${CMD}↵ apri · ↑↓ tracce<br>Esc chiudi</div></div>`;
+  if(keep){const n=document.getElementById(keep.id);if(n){n.value=keep.v;n.focus();try{n.setSelectionRange(keep.s,keep.e)}catch(e){}}}
+  $('#notes').addEventListener('input',e=>{S.pendingNotes={id:p.id,v:e.target.value};clearTimeout(S.notesT);S.notesT=setTimeout(flushNotes,700)});
+  $('#label').addEventListener('change',e=>update(p.id,{label:e.target.value}));
+  $('#rdate').addEventListener('change',e=>update(p.id,{release_date:e.target.value}));
+}
+function flushNotes(){clearTimeout(S.notesT);const n=S.pendingNotes;S.pendingNotes=null;if(n)update(n.id,{notes:n.v})}
+function openPanel(id){
+  if(S.openId!==id)flushNotes();
+  S.openId=id;renderPanel();
+  $('#panel').classList.add('open');document.body.classList.add('panel-open');markSel(true);
+}
+function closePanel(){
+  flushNotes();S.openId=null;
+  $('#panel').classList.remove('open');document.body.classList.remove('panel-open');markSel();
+}
+function markSel(scroll){
+  document.querySelectorAll('#main [data-id]').forEach(e=>{
+    const on=e.dataset.id===S.openId;e.classList.toggle('is-sel',on);
+    if(on&&scroll)setTimeout(()=>e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'}),60);
+  });
+}
+function move(delta){
+  const l=visibleOrder();if(!l.length)return;
+  let i=l.findIndex(p=>p.id===S.openId);
+  i=i<0?0:Math.max(0,Math.min(l.length-1,i+delta));
+  openPanel(l[i].id);
+}
+
+// ------------------------------------------------------------ azioni
 async function update(id,fields){
   try{
     const d=await api('/api/update',{id,...fields});
     const i=S.projects.findIndex(p=>p.id===id);if(i>=0)S.projects[i]=d.project;
     if(d.warning)toast(d.warning);
-    // le note si salvano mentre scrivi: non ridisegnare il modale o la textarea perde il focus
-    render();if(S.openId===id&&!('notes' in fields))renderModal(true);
-    const sv=$('#saved');if(sv){sv.classList.add('show');setTimeout(()=>sv.classList.remove('show'),1200)}
+    renderSide();renderToolbar();renderMain();
+    if(S.openId===id){
+      if('notes' in fields){const s=$('#saved');if(s){s.classList.add('show');setTimeout(()=>s.classList.remove('show'),1300)}}
+      else renderPanel();
+    }
+    return d.project;
   }catch(e){toast('Errore: '+e.message)}
 }
+async function setStatus(id,key){
+  const p=byId(id);if(!p)return;
+  if(key?(p.status===key&&p.status_source==='manual'):p.status_source==='auto')return;
+  const prev=p.status_source==='manual'?p.status:'';
+  const np=await update(id,{status:key});
+  if(np&&S.openId===id)markSel(true);
+  if(np)toast(key?`«${p.name}» → ${label(key)}`:`«${p.name}» torna allo stato automatico (${label(np.status)})`,
+    {label:'Annulla',fn:()=>update(id,{status:prev})});
+}
+async function openIn(id,action){if(!id)return;try{await api('/api/open',{id,action})}catch(e){toast(e.message)}}
+function toggleCol(k,isCollapsed){
+  if(isCollapsed){S.collapsed.delete(k);S.expanded.add(k)}else{S.expanded.delete(k);S.collapsed.add(k)}
+  store('collapsed',JSON.stringify([...S.collapsed]));store('expanded',JSON.stringify([...S.expanded]));
+  renderMain();
+}
+function closeSide(){document.body.classList.remove('side-open')}
 
-function openModal(id){S.openId=id;renderModal();$('#ov').classList.add('show')}
-function closeModal(){S.openId=null;$('#ov').classList.remove('show')}
-function renderModal(keepText){
-  const p=S.projects.find(x=>x.id===S.openId);if(!p)return closeModal();
-  const m=$('#modal');
-  const notes=keepText&&$('#notes')?$('#notes').value:p.notes;
-  m.innerHTML=`<h2>${esc(p.name)}</h2><div class="path">${esc(p.path)}</div>
-    <div class="facts"><div class="fact">Alias<b>${esc(p.alias)}</b></div><div class="fact">BPM<b>${p.bpm||'–'}</b></div>
-    <div class="fact">Ultima modifica<b>${ago(p.days)}</b></div><div class="fact">Versioni .als<b>${p.versions}</b></div></div>
-    ${isStale(p)?`<div class="facts"><span class="tag stale">⏳ Non la tocchi da ${p.days} giorni</span></div>`:''}
-    <div class="lbl">Stato ${p.status_source==='auto'?'<span class="auto">(letto dal nome cartella, clicca per confermare)</span>':''}</div>
-    <div class="stbtns">${S.statuses.map(s=>`<button class="stbtn ${p.status===s.key?'on':''}" data-st="${s.key}" style="--c:var(--${s.key})">${esc(s.label)}</button>`).join('')}</div>
-    <div class="lbl">Note / cose da fare</div>
-    <textarea id="notes" placeholder="es. rifare il drop, kick troppo forte, mandare a …">${esc(notes)}</textarea>
-    <div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="es. Toolroom"></div>
-    <div><div class="lbl">Data di uscita</div><input class="field" type="date" id="rdate" value="${esc(p.release_date)}"></div></div>
-    <div class="actions"><button class="btn primary" data-open="ableton">▶ Apri in Ableton</button>
-    <button class="btn" data-open="finder">Mostra nel Finder</button><span class="saved" id="saved">Salvato ✓</span>
-    <div class="spacer"></div><button class="btn" id="closeM">Chiudi</button></div>`;
-  let t;
-  $('#notes').addEventListener('input',e=>{clearTimeout(t);t=setTimeout(()=>update(p.id,{notes:e.target.value}),700)});
-  $('#label').addEventListener('change',e=>update(p.id,{label:e.target.value}));
-  $('#rdate').addEventListener('change',e=>update(p.id,{release_date:e.target.value}));
+function openMenu(id,x,y){
+  const p=byId(id);if(!p)return;S.menuId=id;const m=$('#menu');
+  m.innerHTML=`<button data-m="open">${ICON.play}Apri in Ableton</button><button data-m="finder">${ICON.folder}Mostra nel Finder</button>
+    <button data-m="details">${ICON.info}Dettagli e note</button><div class="sep"></div><div class="mh">Sposta in</div>`
+    +S.statuses.map(s=>`<button data-m="st" data-st="${s.key}" style="--c:var(--${s.key})"><span class="dot"></span>${esc(s.label)}${p.status===s.key?'<span class="chk">✓</span>':''}</button>`).join('')
+    +(p.status_source==='manual'?`<div class="sep"></div><button data-m="st" data-st="">${ICON.wand}Stato automatico dal nome</button>`:'');
+  m.style.left='0px';m.style.top='0px';m.style.display='block';
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.max(8,Math.min(x,innerWidth-r.width-8))+'px';
+  m.style.top=Math.max(8,Math.min(y,innerHeight-r.height-8))+'px';
+}
+function closeMenu(){$('#menu').style.display='none';S.menuId=null}
+function menuAction(b){
+  const id=S.menuId,a=b.dataset.m;closeMenu();
+  if(a==='open')openIn(id,'ableton');else if(a==='finder')openIn(id,'finder');
+  else if(a==='details')openPanel(id);else if(a==='st')setStatus(id,b.dataset.st);
 }
 
 function openSettings(){
   const s=S.settings;
-  $('#smodal').innerHTML=`<h2>Impostazioni</h2><div class="path">Cartella: ${esc(S.root)}</div>
-    <div class="lbl">Considera "ferma" una traccia non toccata da (giorni)</div>
-    <input class="field" type="number" min="1" id="sdays" value="${s.stale_days}" style="width:120px">
-    <div class="lbl">Tag colorati nel Finder</div>
-    <label><input type="checkbox" id="stags" ${s.finder_tags?'checked':''} ${S.isMac?'':'disabled'}> Quando cambio stato, colora anche la cartella nel Finder</label>
-    <div class="actions"><button class="btn" id="syncTags" ${S.isMac?'':'disabled'}>Applica i tag a tutte le tracce ora</button>
-    <div class="spacer"></div><button class="btn" id="closeS">Chiudi</button></div>`;
-  $('#sdays').addEventListener('change',async e=>{const d=await api('/api/settings',{stale_days:+e.target.value||60});S.settings=d.settings;render()});
-  $('#stags').addEventListener('change',async e=>{const d=await api('/api/settings',{finder_tags:e.target.checked});S.settings=d.settings});
+  $('#smodal').innerHTML=`<h2>Impostazioni</h2><div class="small">Cartella: ${esc(S.root)}</div>
+    <div class="lbl">Tracce ferme</div>
+    <div class="inline">Dopo <input class="field" type="number" min="1" id="sdays" value="${s.stale_days}" style="width:80px"> giorni senza modifiche</div>
+    <div class="lbl">Tag del Finder</div>
+    <label class="check"><input type="checkbox" id="stags" ${s.finder_tags?'checked':''} ${MAC?'':'disabled'}>Quando cambio stato, metti il tag colorato alla cartella del progetto</label>
+    <button class="btn" id="syncTags" style="margin-top:12px" ${MAC?'':'disabled'}>Applica i tag a tutte le tracce</button>
+    <div class="lbl">Scorciatoie</div>
+    <div class="keys"><span><kbd>${CMD}F</kbd> <kbd>/</kbd></span>Cerca<span><kbd>↑</kbd> <kbd>↓</kbd></span>Scorri le tracce e apri i dettagli
+      <span><kbd>1</kbd>–<kbd>${S.statuses.length}</kbd></span>Cambia stato alla traccia aperta<span><kbd>${CMD}↵</kbd></span>Apri in Ableton
+      <span><kbd>Esc</kbd></span>Chiudi pannello o ricerca<span>Tasto destro</span>Menu della traccia</div>
+    <div class="m-foot"><button class="btn primary" id="closeS">Fatto</button></div>`;
+  $('#sdays').addEventListener('change',async e=>{try{const d=await api('/api/settings',{stale_days:+e.target.value||60});S.settings=d.settings;render()}catch(err){toast(err.message)}});
+  $('#stags').addEventListener('change',async e=>{try{const d=await api('/api/settings',{finder_tags:e.target.checked});S.settings=d.settings}catch(err){toast(err.message)}});
   $('#syncTags').addEventListener('click',async()=>{try{const d=await api('/api/sync_tags',{});toast(`Tag applicati a ${d.ok} tracce`+(d.errors.length?` (${d.errors.length} errori)`:''))}catch(e){toast('Errore: '+e.message)}});
   $('#ovs').classList.add('show');
 }
+function closeSettings(){$('#ovs').classList.remove('show')}
 
-document.addEventListener('click',async e=>{
-  const t=e.target;
-  if(t.closest('[data-view]')){S.view=t.closest('[data-view]').dataset.view;store('view',S.view);render();return}
-  if(t.closest('[data-alias]')){S.alias=t.closest('[data-alias]').dataset.alias;render();return}
-  if(t.closest('#staleBtn')){S.staleOnly=!S.staleOnly;render();return}
-  if(t.closest('#reload')){load(true);toast('Cartella riletta');return}
+// ------------------------------------------------------------ eventi
+document.addEventListener('click',e=>{
+  if(e.button!==0||(MAC&&e.ctrlKey))return;  // tasto destro / ctrl-clic: ci pensa il menu
+  const t=e.target;let x;
+  if(t.closest('#menu')){const b=t.closest('[data-m]');if(b)menuAction(b);return}
+  if(S.menuId)closeMenu();
+  if(t.closest('#toast'))return;
+  if(x=t.closest('[data-act]')){
+    const host=x.closest('[data-id]'),id=host?host.dataset.id:S.openId,a=x.dataset.act;
+    if(a==='play')openIn(id,'ableton');else if(a==='finder')openIn(id,'finder');
+    else if(a==='more'){const r=x.getBoundingClientRect();openMenu(id,r.left,r.bottom+4)}
+    return;
+  }
+  if(x=t.closest('[data-view]')){S.view=x.dataset.view;store('view',S.view);render();markSel(true);return}
+  if(x=t.closest('[data-filter]')){S.filter=x.dataset.filter;closeSide();render();return}
+  if(x=t.closest('[data-alias]')){S.alias=x.dataset.alias;closeSide();render();return}
+  if(x=t.closest('[data-toggle]')){toggleCol(x.dataset.toggle,!!x.closest('.collapsed'));return}
+  if(x=t.closest('[data-sort]')){const k=x.dataset.sort,c=sortSpec();S.sort=k+':'+(c.k===k?-c.dir:(k==='mtime'||k==='bpm'?-1:1));store('sort',S.sort);renderToolbar();renderMain();return}
+  if(x=t.closest('#panel [data-st]')){setStatus(S.openId,x.dataset.st);return}
+  if(t.closest('[data-close]')){closePanel();return}
+  if(t.closest('#reload')){load(true).then(()=>toast('Cartella riletta'));return}
   if(t.closest('#settingsBtn')){openSettings();return}
-  if(t.closest('[data-sort]')){const k=t.closest('[data-sort]').dataset.sort;S.sort=S.sort.k===k?{k,dir:-S.sort.dir}:{k,dir:k==='mtime'||k==='bpm'?-1:1};render();return}
-  if(t.closest('.card,.row')){openModal(t.closest('.card,.row').dataset.id);return}
-  if(t.closest('[data-st]')){update(S.openId,{status:t.closest('[data-st]').dataset.st});return}
-  if(t.closest('[data-open]')){try{await api('/api/open',{id:S.openId,action:t.closest('[data-open]').dataset.open})}catch(err){toast(err.message)}return}
-  if(t.closest('#closeM')||t.id==='ov'){closeModal();return}
-  if(t.closest('#closeS')||t.id==='ovs'){$('#ovs').classList.remove('show');return}
+  if(t.closest('#closeS')||t.id==='ovs'){closeSettings();return}
+  if(t.closest('#sideBtn')){document.body.classList.toggle('side-open');return}
+  if(t.closest('#resetF')){S.filter='all';S.alias='__all';S.q='';$('#q').value='';render();return}
+  if(t.closest('#retry')){load(true);return}
+  if(x=t.closest('#main [data-id]')){openPanel(x.dataset.id);return}
+  if(document.body.classList.contains('side-open')&&!t.closest('#side'))closeSide();
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();$('#ovs').classList.remove('show')}});
-$('#q').addEventListener('input',e=>{S.q=e.target.value;render()});
+document.addEventListener('contextmenu',e=>{
+  const x=e.target.closest('#main [data-id]');if(!x)return;
+  e.preventDefault();openMenu(x.dataset.id,e.clientX,e.clientY);
+});
+document.addEventListener('keydown',e=>{
+  const a=document.activeElement,typing=isTyping(a),mod=e.metaKey||e.ctrlKey;
+  if(mod&&e.key.toLowerCase()==='f'){e.preventDefault();$('#q').focus();$('#q').select();return}
+  if(mod&&e.key==='Enter'&&S.openId){e.preventDefault();openIn(S.openId,'ableton');return}
+  if(e.key==='Escape'){
+    if(S.menuId)return closeMenu();
+    if($('#ovs').classList.contains('show'))return closeSettings();
+    if(a===$('#q')&&S.q){S.q='';a.value='';renderToolbar();renderMain();return}
+    if(typing)return a.blur();
+    if(S.openId)return closePanel();
+    return;
+  }
+  if(typing||mod||e.altKey||$('#ovs').classList.contains('show'))return;
+  if(e.key==='/'){e.preventDefault();$('#q').focus();return}
+  if(S.openId&&/^[1-9]$/.test(e.key)){const s=S.statuses[+e.key-1];if(s)setStatus(S.openId,s.key);return}
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();closeMenu();move(e.key==='ArrowDown'?1:-1)}
+});
+$('#q').addEventListener('input',e=>{S.q=e.target.value;renderToolbar();renderMain()});
+$('#sort').addEventListener('change',e=>{if(e.target.value){S.sort=e.target.value;store('sort',S.sort);renderMain()}});
 
 let dragId=null;
-document.addEventListener('dragstart',e=>{const c=e.target.closest&&e.target.closest('.card');if(!c)return;dragId=c.dataset.id;c.classList.add('dragging');e.dataTransfer.effectAllowed='move'});
-document.addEventListener('dragend',e=>{document.querySelectorAll('.dragging,.over').forEach(x=>x.classList.remove('dragging','over'))});
-document.addEventListener('dragover',e=>{const col=e.target.closest&&e.target.closest('.col');if(!col||!dragId)return;e.preventDefault();
-  document.querySelectorAll('.col.over').forEach(x=>x!==col&&x.classList.remove('over'));col.classList.add('over')});
-document.addEventListener('drop',e=>{const col=e.target.closest&&e.target.closest('.col');if(!col||!dragId)return;e.preventDefault();
-  const p=S.projects.find(x=>x.id===dragId);if(p&&p.status!==col.dataset.status)update(dragId,{status:col.dataset.status});dragId=null});
-window.addEventListener('focus',()=>{if(!S.openId)load()});
-load();
+document.addEventListener('dragstart',e=>{
+  const c=e.target.closest&&e.target.closest('.card');if(!c)return;
+  dragId=c.dataset.id;c.classList.add('dragging');closeMenu();
+  e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',dragId)}catch(_){}
+});
+document.addEventListener('dragend',()=>{dragId=null;document.querySelectorAll('.dragging,.over').forEach(x=>x.classList.remove('dragging','over'))});
+document.addEventListener('dragover',e=>{
+  const col=e.target.closest&&e.target.closest('.col');if(!col||!dragId)return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  document.querySelectorAll('.col.over').forEach(x=>x!==col&&x.classList.remove('over'));col.classList.add('over');
+});
+document.addEventListener('drop',e=>{
+  const col=e.target.closest&&e.target.closest('.col');if(!col||!dragId)return;
+  e.preventDefault();const id=dragId;dragId=null;setStatus(id,col.dataset.status);
+});
+window.addEventListener('focus',()=>{if(!isTyping(document.activeElement))load()});
+
+document.querySelectorAll('[data-i]').forEach(e=>e.insertAdjacentHTML('afterbegin',ICON[e.dataset.i]));
+$('#qkey').textContent=MAC?'⌘F':'Ctrl F';
+$('#sort').innerHTML='<option value="" hidden>Personalizzato</option>'+Object.entries(SORTS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+render();load();
 </script></body></html>"""
 
 if __name__ == "__main__":

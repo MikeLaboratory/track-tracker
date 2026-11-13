@@ -88,10 +88,22 @@ Maiuscole e minuscole non contano, e funzionano anche separatori come `_` o `-` 
 
 ## Cosa puoi fare
 
-- **Board** con una colonna per stato: trascina le card per cambiarlo. Oppure usa la vista **Lista**, ordinabile per colonna.
-- Filtra per alias, cerca nei nomi e nelle note, mostra **solo le tracce ferme** (non toccate da più di N giorni, 60 di default, modificabile in ⚙︎).
-- Clicca una traccia per scrivere note e cose da fare (salvate mentre scrivi), label e data di uscita.
-- **▶ Apri in Ableton** e **Mostra nel Finder** (solo Mac).
+- **Board** con una colonna per stato: trascina le card per cambiarlo. Le colonne vuote si comprimono da sole e puoi comprimere quelle che non ti servono con ‹ ("Rilasciata" parte compressa, come archivio). Oppure usa la vista **Lista**, ordinabile cliccando le intestazioni.
+- **Barra laterale** con l'avanzamento della libreria, i filtri per stato, le **tracce ferme** (non toccate da più di N giorni, 60 di default, modificabile in ⚙︎) e gli alias.
+- Cerca nei nomi, nelle note e nelle label; ordina per data, nome, BPM o stato.
+- Clicca una traccia per aprire il **pannello dei dettagli**: stato, note e cose da fare (salvate mentre scrivi), label e data di uscita. Puoi scorrere le tracce con ↑ ↓ senza chiuderlo.
+- **Tasto destro** su una traccia (o ⋯): apri in Ableton, mostra nel Finder, sposta in un altro stato o torna allo stato automatico dal nome.
+- Ogni cambio di stato si può **annullare** dal messaggio che compare in basso.
+- **▶ Apri in Ableton** direttamente dalla card (solo Mac).
+
+| Tasto | Azione |
+|---|---|
+| ⌘F o / | Cerca |
+| ↑ ↓ | Scorri le tracce e apri i dettagli |
+| 1–8 | Cambia stato alla traccia aperta |
+| ⌘↵ | Apri in Ableton la traccia aperta |
+| Esc | Chiudi menu, ricerca o pannello |
+
 - **Tag colorati nel Finder** (solo Mac): quando cambi stato, la cartella del progetto riceve il tag corrispondente. Da ⚙︎ puoi disattivarli o applicarli a tutte le tracce in una volta. Il Finder ha 7 colori per 8 stati, quindi "Idea" è un tag senza colore:
 
   | Idea | In lavorazione | Arrangiamento | Da mixare | Master | Bloccata | Finita | Rilasciata |
