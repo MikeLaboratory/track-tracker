@@ -164,6 +164,7 @@ def scan_fs():
         parts = rel.split("/")
         try:
             stats = [(e, e.stat()) for e in als_entries]
+            fst = folder.stat()
         except OSError:  # file spostato o cancellato durante la scansione
             continue
         main, st = max(stats, key=lambda x: x[1].st_mtime)
@@ -181,6 +182,9 @@ def scan_fs():
             "folder": folder.name,
             "alias": parts[0] if len(parts) > 1 else "Senza alias",
             "in_released": any(RELEASE_DIR.fullmatch(p) for p in parts[:-1]),
+            # identità della cartella su disco: resta uguale se la rinomini o la sposti
+            # sullo stesso disco, quindi permette di ritrovare stato e note
+            "ino": f"{fst.st_dev}:{fst.st_ino}",
             "path": str(folder),
             "als": main.path,
             "als_name": main.name,
@@ -196,6 +200,50 @@ def scan_fs():
     return base
 
 
+def _unique_by(pairs):
+    """{chiave: id} tenendo solo le chiavi che compaiono una volta sola."""
+    seen = {}
+    for rid, key in pairs:
+        seen.setdefault(key, []).append(rid)
+    return {k: ids[0] for k, ids in seen.items() if len(ids) == 1}
+
+
+def reconcile(base):
+    """Riaggancia stato e note dei progetti rinominati o spostati. Va chiamata con LOCK preso.
+
+    Un dato salvato senza più cartella ("orfano") viene spostato su una cartella nuova
+    se hanno la stessa identità su disco, oppure, se la cartella è stata copiata su un
+    altro disco, lo stesso file .als principale, ma solo quando l'abbinamento è univoco.
+    Gli orfani senza abbinamento restano nel JSON (il disco potrebbe essere scollegato)."""
+    saved = DATA["projects"]
+    changed = False
+    orphans = {rid: e for rid, e in saved.items() if rid not in base}
+    new = {rid: b for rid, b in base.items() if rid not in saved}
+    if orphans and new:
+        new_by_ino = _unique_by((rid, b["ino"]) for rid, b in new.items())
+        for oid, e in list(orphans.items()):
+            nid = new_by_ino.get(e.get("ino"))
+            if nid in new:
+                saved[nid] = saved.pop(oid)
+                del new[nid], orphans[oid]
+                changed = True
+        old_by_als = _unique_by((oid, e["als_name"]) for oid, e in orphans.items()
+                                if e.get("als_name"))
+        new_by_als = _unique_by((rid, b["als_name"]) for rid, b in new.items())
+        for name, oid in old_by_als.items():
+            if name in new_by_als:
+                saved[new_by_als[name]] = saved.pop(oid)
+                changed = True
+    # tieni aggiornata l'impronta dei progetti che conosciamo
+    for rid, e in saved.items():
+        b = base.get(rid)
+        if b and (e.get("ino") != b["ino"] or e.get("als_name") != b["als_name"]):
+            e["ino"], e["als_name"] = b["ino"], b["als_name"]
+            changed = True
+    if changed:
+        save_data(DATA)
+
+
 def scan(fresh=False):
     """Ritorna {id: progetto}: cartelle dal disco + stati/note salvati."""
     now = time.time()
@@ -203,9 +251,12 @@ def scan(fresh=False):
     with LOCK:
         if fresh:
             _FS["at"] = 0.0
-        for rel, b in scan_fs().items():
+        base = scan_fs()
+        reconcile(base)
+        for rel, b in base.items():
             p = dict(b)
             in_released = p.pop("in_released")
+            p.pop("ino")
             saved = DATA["projects"].get(rel, {})
             if saved.get("status") in STATUS_KEYS:
                 status, source = saved["status"], "manual"

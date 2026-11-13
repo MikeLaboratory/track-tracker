@@ -61,7 +61,7 @@ Maiuscole e minuscole non contano, e funzionano anche separatori come `_` o `-` 
 
 Stati, note, label e impostazioni vengono salvati in `_tracker_data.json` nella cartella dei progetti. I tuoi file Ableton non vengono mai modificati: al massimo ricevono un tag del Finder.
 
-Stati e note sono legati al **percorso** della cartella del progetto: se rinomini o sposti una cartella, il progetto riparte da zero (i vecchi dati restano nel JSON).
+Se **rinomini o sposti** la cartella di un progetto (anche sotto un altro alias o in `Released`), stato e note la seguono: Track Tracker la riconosce dalla sua identità su disco. Se invece la copi su un altro disco, la ritrova dal nome del file `.als` principale, ma solo se nessun altro progetto ha un `.als` con lo stesso nome (due `Untitled.als`, per esempio, non vengono riagganciati). I dati di un progetto non più trovato restano nel JSON, così ricompaiono se ricolleghi il disco.
 
 ## Sicurezza
 
