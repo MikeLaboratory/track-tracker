@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,16 +33,18 @@ MAX_DEPTH = 6
 SKIP_DIRS = {"Backup", "Samples", "Ableton Project Info", "Recorded", "Processed",
              "Imported", "Freeze", "Consolidated", "Presets"}
 
-# chiave, etichetta, colore tag Finder (1 grigio, 2 verde, 3 viola, 4 blu, 5 giallo, 6 rosso, 7 arancio)
+# chiave, etichetta, colore tag Finder (0 nessuno, 1 grigio, 2 verde, 3 viola, 4 blu, 5 giallo,
+# 6 rosso, 7 arancio). Il Finder ha solo 7 colori per 8 stati: le idee, che sono le più numerose,
+# hanno il tag senza colore, così il grigio va a "Rilasciata" e non si confonde con "Finita".
 STATUSES = [
-    ("idea", "Idea", 1),
+    ("idea", "Idea", 0),
     ("wip", "In lavorazione", 4),
     ("arrangiamento", "Arrangiamento", 3),
     ("mix", "Da mixare", 7),
     ("master", "Master", 5),
     ("bloccata", "Bloccata", 6),
     ("finita", "Finita", 2),
-    ("rilasciata", "Rilasciata", 2),
+    ("rilasciata", "Rilasciata", 1),
 ]
 STATUS_KEYS = {s[0] for s in STATUSES}
 STATUS_LABELS = {s[1] for s in STATUSES}
@@ -408,6 +411,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if self.path in ("/", "/index.html"):
             return self._send(200, HTML, "text/html; charset=utf-8")
+        if self.path == "/api/ping":
+            return self._send(200, {"app": "track-tracker", "root": str(ROOT)})
         if self.path in ("/api/projects", "/api/projects?fresh=1"):
             return self._send(200, payload(fresh=self.path.endswith("fresh=1")))
         self._send(404, {"error": "not found"})
@@ -437,30 +442,55 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_launcher():
-    """Crea 'Avvia Track Tracker.command' accanto allo script: poi basta il doppio clic."""
+    """Crea 'Avvia Track Tracker.command' nella cartella dei progetti: poi basta il doppio clic.
+    Il launcher apre la cartella in cui si trova, quindi funziona anche se hai lanciato
+    lo script da un'altra parte passando la cartella come argomento."""
     if not IS_MAC:
         return
-    launcher = SCRIPT_DIR / "Avvia Track Tracker.command"
+    launcher = ROOT / "Avvia Track Tracker.command"
     if launcher.exists():
         return
+    # script nella stessa cartella: percorso relativo, così puoi spostare tutta la cartella
+    script = Path(__file__).name if ROOT == SCRIPT_DIR else str(Path(__file__).resolve())
     try:
         launcher.write_text(
             '#!/bin/bash\ncd "$(dirname "$0")"\n'
-            f'exec /usr/bin/env python3 "{Path(__file__).name}"\n', encoding="utf-8")
+            f'exec /usr/bin/env python3 "{script}" "$PWD"\n', encoding="utf-8")
         launcher.chmod(0o755)
         print(f"Creato '{launcher.name}': la prossima volta fai doppio clic su quello.")
     except OSError:
         pass
 
 
-def main():
-    url = f"http://127.0.0.1:{PORT}"
+def running_root(port):
+    """Se su questa porta gira già Track Tracker, ritorna la sua cartella; altrimenti None."""
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    except OSError:
-        print("Track Tracker è già aperto, apro il browser.")
-        webbrowser.open(url)
-        return
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1) as r:
+            d = json.loads(r.read())
+        return d.get("root") if d.get("app") == "track-tracker" else None
+    except Exception:
+        return None
+
+
+def main():
+    global PORT
+    server = None
+    for port in range(PORT, PORT + 10):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError:
+            # porta occupata: se è Track Tracker sulla stessa cartella basta aprire il browser,
+            # se è un altro programma (o un'altra cartella) proviamo la porta dopo
+            if running_root(port) == str(ROOT):
+                print("Track Tracker è già aperto, apro il browser.")
+                webbrowser.open(f"http://127.0.0.1:{port}")
+                return
+    if server is None:
+        print(f"Nessuna porta libera tra {PORT} e {PORT + 9}: chiudi qualche programma e riprova.")
+        sys.exit(1)
+    PORT = port
+    url = f"http://127.0.0.1:{PORT}"
     make_launcher()
     print(f"Track Tracker attivo su {url}")
     print(f"Cartella: {ROOT}")

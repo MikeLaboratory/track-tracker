@@ -15,13 +15,17 @@ Funziona tutto in locale: è un unico file Python, senza librerie da installare 
 
 3. Si apre il browser su <http://127.0.0.1:8765>. Per chiudere premi `Ctrl+C` nel Terminale.
 
-Su Mac, al primo avvio viene creato `Avvia Track Tracker.command` accanto allo script: le volte successive basta un doppio clic su quel file.
+Su Mac, al primo avvio viene creato `Avvia Track Tracker.command` nella cartella dei progetti: le volte successive basta un doppio clic su quel file.
 
 Puoi anche lasciare lo script altrove e passare la cartella come argomento:
 
 ```bash
 python3 track_tracker.py ~/Music/"Ableton Projects"
 ```
+
+Anche in questo caso il launcher viene creato nella cartella dei progetti e la riapre da solo (se poi sposti lo script, cancella il launcher: verrà ricreato al prossimo avvio).
+
+Se Track Tracker è già aperto su quella cartella, rilanciarlo apre solo il browser. Se la porta 8765 è occupata da un altro programma (o da Track Tracker aperto su un'altra cartella), usa la prima libera tra 8766 e 8774: l'indirizzo giusto è scritto nel Terminale.
 
 Serve Python 3.8 o successivo (su macOS è già installato con gli strumenti da riga di comando).
 
@@ -55,7 +59,11 @@ Maiuscole e minuscole non contano, e funzionano anche separatori come `_` o `-` 
 - Filtra per alias, cerca nei nomi e nelle note, mostra **solo le tracce ferme** (non toccate da più di N giorni, 60 di default, modificabile in ⚙︎).
 - Clicca una traccia per scrivere note e cose da fare (salvate mentre scrivi), label e data di uscita.
 - **▶ Apri in Ableton** e **Mostra nel Finder** (solo Mac).
-- **Tag colorati nel Finder** (solo Mac): quando cambi stato, la cartella del progetto riceve il tag corrispondente. Da ⚙︎ puoi disattivarli o applicarli a tutte le tracce in una volta.
+- **Tag colorati nel Finder** (solo Mac): quando cambi stato, la cartella del progetto riceve il tag corrispondente. Da ⚙︎ puoi disattivarli o applicarli a tutte le tracce in una volta. Il Finder ha 7 colori per 8 stati, quindi "Idea" è un tag senza colore:
+
+  | Idea | In lavorazione | Arrangiamento | Da mixare | Master | Bloccata | Finita | Rilasciata |
+  |---|---|---|---|---|---|---|---|
+  | nessuno | blu | viola | arancio | giallo | rosso | verde | grigio |
 
 ## Dove sono i dati
 
