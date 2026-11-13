@@ -46,15 +46,17 @@ STATUSES = [
 STATUS_KEYS = {s[0] for s in STATUSES}
 STATUS_LABELS = {s[1] for s in STATUSES}
 
-# parole nel nome della cartella -> stato iniziale (se non l'hai ancora impostato tu)
+# parole nel nome della cartella -> stato iniziale (se non l'hai ancora impostato tu).
+# Niente \b: "_" conta come lettera per le regex, quindi "Track_DONE" non verrebbe riconosciuto.
+_B, _E = r"(?<![A-Z0-9])", r"(?![A-Z0-9])"
 NAME_RULES = [
-    (r"RELEASED|RILASCIAT|USCIT[AOE]\b", "rilasciata"),
+    (rf"RELEASED|RILASCIAT|USCIT[AOE]{_E}", "rilasciata"),
     (r"BLOCK|BLOCCAT|STUCK", "bloccata"),
     (r"MASTER", "master"),
     (r"DA[ _\-]?MIX|MIXARE|TO[ _\-]?MIX|MIXDOWN", "mix"),
-    (r"FINIT[AO]|CONCLUS|\bDONE\b|FINISHED", "finita"),
+    (rf"FINIT[AO]|CONCLUS|{_B}DONE{_E}|FINISHED", "finita"),
     (r"ARRANG", "arrangiamento"),
-    (r"\bIDEA\b|SKETCH|BOZZA", "idea"),
+    (rf"{_B}IDEA{_E}|SKETCH|BOZZA", "idea"),
 ]
 STRIP_END = re.compile(
     r"(?i)[\s_\-–]+(project|da[ _]?mixare|to[ _]?mix|mixdown|blocked|bloccat[ao]|"
@@ -146,58 +148,79 @@ def find_project_dirs():
     return found
 
 
-def scan():
-    """Ritorna {id: progetto}. Usa la cache per non rileggere i BPM a ogni volta."""
+SCAN_TTL = 3.0  # secondi: entro questo tempo si riusa l'ultima lettura del disco
+_FS = {"at": 0.0, "base": {}}
+
+
+def scan_fs():
+    """Legge le cartelle dal disco, al massimo una volta ogni SCAN_TTL secondi.
+    Va chiamata con LOCK preso. Usa la cache per non rileggere i BPM a ogni volta."""
+    if time.time() - _FS["at"] < SCAN_TTL:
+        return _FS["base"]
+    base = {}
+    cache_changed = False
+    for folder, als_entries in find_project_dirs():
+        rel = folder.relative_to(ROOT).as_posix()
+        parts = rel.split("/")
+        try:
+            stats = [(e, e.stat()) for e in als_entries]
+        except OSError:  # file spostato o cancellato durante la scansione
+            continue
+        main, st = max(stats, key=lambda x: x[1].st_mtime)
+
+        ckey = f"{rel}/{main.name}"
+        c = DATA["cache"].get(ckey)
+        if not c or c.get("mtime") != st.st_mtime or c.get("size") != st.st_size:
+            c = {"mtime": st.st_mtime, "size": st.st_size, "bpm": read_bpm(main.path)}
+            DATA["cache"][ckey] = c
+            cache_changed = True
+
+        base[rel] = {
+            "id": rel,
+            "name": clean_name(folder.name).replace("_", " "),
+            "folder": folder.name,
+            "alias": parts[0] if len(parts) > 1 else "Senza alias",
+            "in_released": any(RELEASE_DIR.fullmatch(p) for p in parts[:-1]),
+            "path": str(folder),
+            "als": main.path,
+            "als_name": main.name,
+            "versions": len(als_entries),
+            "bpm": c.get("bpm"),
+            "mtime": max(s.st_mtime for _, s in stats),
+        }
+    if cache_changed:
+        valid = {f"{b['id']}/{b['als_name']}" for b in base.values()}
+        DATA["cache"] = {k: v for k, v in DATA["cache"].items() if k in valid}
+        save_data(DATA)
+    _FS.update(at=time.time(), base=base)
+    return base
+
+
+def scan(fresh=False):
+    """Ritorna {id: progetto}: cartelle dal disco + stati/note salvati."""
     now = time.time()
     projects = {}
-    cache_changed = False
     with LOCK:
-        for folder, als_entries in find_project_dirs():
-            rel = folder.relative_to(ROOT).as_posix()
-            parts = rel.split("/")
-            alias = parts[0] if len(parts) > 1 else "Senza alias"
-            in_released = any(RELEASE_DIR.fullmatch(p) for p in parts[:-1])
-
-            stats = [(e, e.stat()) for e in als_entries]
-            main, st = max(stats, key=lambda x: x[1].st_mtime)
-            mtime = max(s.st_mtime for _, s in stats)
-
-            ckey = f"{rel}/{main.name}"
-            c = DATA["cache"].get(ckey)
-            if not c or c.get("mtime") != st.st_mtime or c.get("size") != st.st_size:
-                c = {"mtime": st.st_mtime, "size": st.st_size, "bpm": read_bpm(main.path)}
-                DATA["cache"][ckey] = c
-                cache_changed = True
-
+        if fresh:
+            _FS["at"] = 0.0
+        for rel, b in scan_fs().items():
+            p = dict(b)
+            in_released = p.pop("in_released")
             saved = DATA["projects"].get(rel, {})
             if saved.get("status") in STATUS_KEYS:
                 status, source = saved["status"], "manual"
             else:
-                status = "rilasciata" if in_released else guess_status(folder.name)
+                status = "rilasciata" if in_released else guess_status(p["folder"])
                 source = "auto"
-
-            projects[rel] = {
-                "id": rel,
-                "name": clean_name(folder.name).replace("_", " "),
-                "folder": folder.name,
-                "alias": alias,
-                "path": str(folder),
-                "als": main.path,
-                "als_name": main.name,
-                "versions": len(als_entries),
-                "bpm": c.get("bpm"),
-                "mtime": mtime,
-                "days": int((now - mtime) // 86400),
-                "status": status,
-                "status_source": source,
-                "notes": saved.get("notes", ""),
-                "label": saved.get("label", ""),
-                "release_date": saved.get("release_date", ""),
-            }
-        if cache_changed:
-            valid = {f"{p['id']}/{p['als_name']}" for p in projects.values()}
-            DATA["cache"] = {k: v for k, v in DATA["cache"].items() if k in valid}
-            save_data(DATA)
+            p.update(
+                days=int((now - p["mtime"]) // 86400),
+                status=status,
+                status_source=source,
+                notes=saved.get("notes", ""),
+                label=saved.get("label", ""),
+                release_date=saved.get("release_date", ""),
+            )
+            projects[rel] = p
     return projects
 
 
@@ -229,8 +252,8 @@ def apply_status_tag(path, status):
 
 # ---------------------------------------------------------------- API
 
-def payload():
-    projects = scan()
+def payload(fresh=False):
+    projects = scan(fresh)
     return {
         "root": str(ROOT),
         "is_mac": IS_MAC,
@@ -334,12 +357,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if self.path in ("/", "/index.html"):
             return self._send(200, HTML, "text/html; charset=utf-8")
-        if self.path == "/api/projects":
-            return self._send(200, payload())
+        if self.path in ("/api/projects", "/api/projects?fresh=1"):
+            return self._send(200, payload(fresh=self.path.endswith("fresh=1")))
         self._send(404, {"error": "not found"})
 
+    def _same_origin(self):
+        """Blocca le POST mandate da altri siti aperti nel browser (CSRF).
+        Il browser mette sempre Origin sulle POST cross-site; il Content-Type JSON
+        obbliga in più a un preflight CORS, che questo server non autorizza."""
+        origin = self.headers.get("Origin")
+        if origin and origin not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            return False
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        return ctype == "application/json"
+
     def do_POST(self):
-        if not self._local_host():
+        if not self._local_host() or not self._same_origin():
             return self._send(403, {"error": "forbidden"})
         fn = ROUTES.get(self.path)
         if not fn:
@@ -494,8 +527,8 @@ async function api(path,body){
 }
 function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',3500)}
 
-async function load(){
-  try{const d=await api('/api/projects');Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,isMac:d.is_mac});render()}
+async function load(fresh){
+  try{const d=await api('/api/projects'+(fresh?'?fresh=1':''));Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,isMac:d.is_mac});render()}
   catch(e){$('#main').innerHTML='<div class="empty">Errore: '+esc(e.message)+'</div>'}
 }
 function ago(d){if(d<=0)return'oggi';if(d===1)return'ieri';if(d<45)return d+' g fa';if(d<365)return Math.round(d/30)+' mesi fa';const y=Math.floor(d/365);return y+(y===1?' anno fa':' anni fa')}
@@ -554,7 +587,8 @@ async function update(id,fields){
     const d=await api('/api/update',{id,...fields});
     const i=S.projects.findIndex(p=>p.id===id);if(i>=0)S.projects[i]=d.project;
     if(d.warning)toast(d.warning);
-    render();if(S.openId===id)renderModal(true);
+    // le note si salvano mentre scrivi: non ridisegnare il modale o la textarea perde il focus
+    render();if(S.openId===id&&!('notes' in fields))renderModal(true);
     const sv=$('#saved');if(sv){sv.classList.add('show');setTimeout(()=>sv.classList.remove('show'),1200)}
   }catch(e){toast('Errore: '+e.message)}
 }
@@ -604,7 +638,7 @@ document.addEventListener('click',async e=>{
   if(t.closest('[data-view]')){S.view=t.closest('[data-view]').dataset.view;store('view',S.view);render();return}
   if(t.closest('[data-alias]')){S.alias=t.closest('[data-alias]').dataset.alias;render();return}
   if(t.closest('#staleBtn')){S.staleOnly=!S.staleOnly;render();return}
-  if(t.closest('#reload')){load();toast('Cartella riletta');return}
+  if(t.closest('#reload')){load(true);toast('Cartella riletta');return}
   if(t.closest('#settingsBtn')){openSettings();return}
   if(t.closest('[data-sort]')){const k=t.closest('[data-sort]').dataset.sort;S.sort=S.sort.k===k?{k,dir:-S.sort.dir}:{k,dir:k==='mtime'||k==='bpm'?-1:1};render();return}
   if(t.closest('.card,.row')){openModal(t.closest('.card,.row').dataset.id);return}
