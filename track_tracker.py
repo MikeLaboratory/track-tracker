@@ -26,7 +26,10 @@ from pathlib import Path
 
 PORT = 8765
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT = Path(sys.argv[1]).expanduser().resolve() if len(sys.argv) > 1 else SCRIPT_DIR
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+# --app: lanciato da TrackTracker.app (porta scelta dal sistema, niente browser né launcher)
+APP_MODE = "--app" in sys.argv[1:]
+ROOT = Path(ARGS[0]).expanduser().resolve() if ARGS else SCRIPT_DIR
 DATA_FILE = ROOT / "_tracker_data.json"
 IS_MAC = sys.platform == "darwin"
 MAX_DEPTH = 6
@@ -472,7 +475,24 @@ def running_root(port):
         return None
 
 
+def main_app():
+    """Modalità app: l'app legge l'indirizzo da stdout e chiude stdin quando esce."""
+    global PORT
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    PORT = server.server_address[1]
+    print(f"TRACKTRACKER_URL http://127.0.0.1:{PORT}", flush=True)
+
+    def exit_when_app_quits():
+        sys.stdin.read()  # ritorna solo quando l'app chiude la pipe (anche se va in crash)
+        os._exit(0)
+
+    threading.Thread(target=exit_when_app_quits, daemon=True).start()
+    server.serve_forever()
+
+
 def main():
+    if APP_MODE:
+        return main_app()
     global PORT
     server = None
     for port in range(PORT, PORT + 10):

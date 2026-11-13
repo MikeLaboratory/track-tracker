@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+Apps/
+.DS_Store
+__pycache__/
+_tracker_data.json
+_tracker_data.tmp

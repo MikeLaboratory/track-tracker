@@ -2,9 +2,42 @@
 
 Una board per tenere traccia dello stato dei tuoi progetti Ableton Live: idea, in lavorazione, arrangiamento, da mixare, master, bloccata, finita, rilasciata.
 
-Funziona tutto in locale: è un unico file Python, senza librerie da installare e senza cloud. Si apre nel browser.
+Funziona tutto in locale, senza account né cloud. Puoi usarla come app per Mac con la sua finestra, oppure lanciare direttamente lo script Python e aprirla nel browser.
 
-## Avvio
+## App per Mac
+
+Il modo più comodo: un'app con la sua icona e la sua finestra, senza Terminale né browser.
+
+### Requisiti
+
+- macOS 13 Ventura o successivo
+- Xcode o Command Line Tools (servono per compilare e forniscono anche Python 3)
+
+### Installazione
+
+```bash
+git clone https://github.com/MikeLaboratory/track-tracker.git
+cd track-tracker
+./Scripts/build-app.sh
+open "Apps/Track Tracker.app"
+```
+
+Lo script compila l'app, disegna l'icona, la firma per il tuo Mac (firma locale *ad hoc*, non una notarizzazione Apple) e la mette in `Apps/`. Da lì puoi trascinarla in **Applicazioni** o nel Dock.
+
+Al primo avvio ti chiede la cartella dei progetti Ableton e poi se la ricorda. Per cambiarla: **Archivio → Scegli cartella progetti…** (⌘O).
+
+| Scorciatoia | Azione |
+|---|---|
+| ⌘O | Scegli cartella progetti |
+| ⇧⌘O | Mostra la cartella nel Finder |
+| ⌘R | Rileggi la cartella |
+| ⌘F | Cerca |
+
+Dentro l'app gira lo stesso `track_tracker.py` descritto sotto: dati, stati e note sono gli stessi, che tu usi l'app o lo script. Dopo aver modificato lo script, rilancia `./Scripts/build-app.sh` per aggiornare l'app. Per controllare che l'app si avvii e carichi la board: `"Apps/Track Tracker.app/Contents/MacOS/TrackTracker" --check-launch`.
+
+> Ogni volta che ricompili, macOS può chiederti di nuovo il permesso di accedere a cartelle come Documenti o Scrivania: è normale con la firma ad hoc.
+
+## Avvio da Terminale (senza app)
 
 1. Copia `track_tracker.py` dentro la cartella che contiene i tuoi progetti (es. `Ableton Projects`).
 2. Apri il Terminale in quella cartella e lancia:
@@ -73,4 +106,4 @@ Se **rinomini o sposti** la cartella di un progetto (anche sotto un altro alias 
 
 ## Sicurezza
 
-Il server ascolta solo su `127.0.0.1`, quindi non è raggiungibile dalla rete. Accetta richieste solo dalla propria pagina: altri siti aperti nel browser non possono modificare i dati.
+Il server (anche quello dentro l'app) ascolta solo su `127.0.0.1`, quindi non è raggiungibile dalla rete. Accetta richieste solo dalla propria pagina: altri siti aperti nel browser non possono modificare i dati.
