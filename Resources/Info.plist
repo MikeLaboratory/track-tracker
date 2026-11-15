@@ -14,10 +14,11 @@
     <string>AppIcon.icns</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- versione e build vengono scritte da Scripts/build-app.sh (da __version__ e dal numero di commit) -->
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>0.0.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>0</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>it</string>
     <key>LSApplicationCategoryType</key>

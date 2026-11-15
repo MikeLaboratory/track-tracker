@@ -10,6 +10,11 @@ Si apre il browser su http://127.0.0.1:8765. Per chiudere: Ctrl+C nel Terminale.
 I dati (stati, note, label...) sono salvati in "_tracker_data.json"
 nella stessa cartella.
 """
+
+# Versione dell'app (MAJOR.MINOR.PATCH): è l'unico posto dove si scrive.
+# La legge anche Scripts/build-app.sh per l'app Mac; per cambiarla usa Scripts/release.sh.
+__version__ = "1.1.0"
+
 import gzip
 import json
 import os
@@ -314,6 +319,7 @@ def payload(fresh=False):
     projects = scan(fresh)
     return {
         "root": str(ROOT),
+        "version": __version__,
         "is_mac": IS_MAC,
         "statuses": [{"key": k, "label": l} for k, l, _ in STATUSES],
         "settings": DATA["settings"],
@@ -420,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             return self._send(200, HTML, "text/html; charset=utf-8")
         if self.path == "/api/ping":
-            return self._send(200, {"app": "track-tracker", "root": str(ROOT)})
+            return self._send(200, {"app": "track-tracker", "version": __version__, "root": str(ROOT)})
         if self.path in ("/api/projects", "/api/projects?fresh=1"):
             return self._send(200, payload(fresh=self.path.endswith("fresh=1")))
         self._send(404, {"error": "not found"})
@@ -496,6 +502,8 @@ def main_app():
 
 
 def main():
+    if "--version" in sys.argv[1:]:
+        return print(f"Track Tracker {__version__}")
     if APP_MODE:
         return main_app()
     global PORT
@@ -678,6 +686,7 @@ textarea{display:block;width:100%;min-height:170px;background:var(--raise);borde
 textarea::placeholder,.field::placeholder{color:var(--dim)}
 .field{width:100%;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:7px 10px;outline:none}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+body.panel-open .search input{width:190px}
 .saved{color:var(--finita);opacity:0;transition:opacity .3s;text-transform:none;letter-spacing:0;font-weight:500}
 .saved.show{opacity:1}
 .p-foot{border-top:1px solid var(--line);padding:12px 16px 12px 20px;display:flex;gap:8px;align-items:center}
@@ -743,7 +752,7 @@ kbd{font:11.5px -apple-system,sans-serif;color:var(--text);background:#ffffff10;
 </style></head><body>
 <div class="shell">
   <aside class="side" id="side">
-    <div class="brand"><span class="logo"><svg viewBox="0 0 20 20"><path d="M3.5 9v2" stroke="#8e8e93"/><path d="M6.75 6.5v7" stroke="#0a84ff"/><path d="M10 3.5v13" stroke="#bf5af2"/><path d="M13.25 6v8" stroke="#ff9f0a"/><path d="M16.5 8.5v3" stroke="#30d158"/></svg></span>Track Tracker</div>
+    <div class="brand" id="brand"><span class="logo"><svg viewBox="0 0 20 20"><path d="M3.5 9v2" stroke="#8e8e93"/><path d="M6.75 6.5v7" stroke="#0a84ff"/><path d="M10 3.5v13" stroke="#bf5af2"/><path d="M13.25 6v8" stroke="#ff9f0a"/><path d="M16.5 8.5v3" stroke="#30d158"/></svg></span>Track Tracker</div>
     <div id="sideStats"></div>
     <nav class="navs" id="nav"></nav>
     <div class="side-foot"><span data-i="folder"></span><span class="fn" id="folder"></span><button class="ib" id="settingsBtn" title="Impostazioni e scorciatoie" data-i="gear"></button></div>
@@ -827,7 +836,8 @@ function hideToast(){$('#toast').classList.remove('show')}
 async function load(fresh){
   try{
     const d=await api('/api/projects'+(fresh?'?fresh=1':''));
-    Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,loaded:true,error:''});
+    Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,version:d.version,loaded:true,error:''});
+    $('#brand').title='Track Tracker '+d.version;
   }catch(e){S.error=e.message;S.loaded=true}
   S.aliasN=new Set(S.projects.map(p=>p.alias)).size;
   if(S.alias!=='__all'&&!S.projects.some(p=>p.alias===S.alias))S.alias='__all';
@@ -964,8 +974,8 @@ function renderPanel(){
     ${p.status_source==='auto'?'<div class="autonote">Stato dedotto dal nome della cartella: scegline uno per confermarlo.</div>':''}
     <div class="lbl">Note e cose da fare<span class="saved" id="saved">Salvato ✓</span></div>
     <textarea id="notes" data-pid="${esc(p.id)}" placeholder="Rifare il drop, kick troppo forte, mandare a…">${esc(notes)}</textarea>
-    <div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="es. Toolroom"></div>
-      <div><div class="lbl">Data di uscita</div><input class="field" type="date" id="rdate" value="${esc(p.release_date)}"></div></div>
+    <div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="Nome della label"></div>
+      <div><div class="lbl">Data di uscita</div><input class="field" id="rdate" type="${p.release_date?'date':'text'}" placeholder="Nessuna data" value="${esc(p.release_date)}"></div></div>
   </div>
   <div class="p-foot"><button class="btn primary" data-act="play">${ICON.play}Apri in Ableton</button>
     <button class="btn" data-act="finder">${ICON.folder}Finder</button>
@@ -973,7 +983,11 @@ function renderPanel(){
   if(keep){const n=document.getElementById(keep.id);if(n){n.value=keep.v;n.focus();try{n.setSelectionRange(keep.s,keep.e)}catch(e){}}}
   $('#notes').addEventListener('input',e=>{S.pendingNotes={id:p.id,v:e.target.value};clearTimeout(S.notesT);S.notesT=setTimeout(flushNotes,700)});
   $('#label').addEventListener('change',e=>update(p.id,{label:e.target.value}));
-  $('#rdate').addEventListener('change',e=>update(p.id,{release_date:e.target.value}));
+  // data vuota: campo di testo "Nessuna data" (WebKit mostrerebbe la data di oggi come se fosse impostata)
+  const rd=$('#rdate');
+  rd.addEventListener('focus',()=>{if(rd.type!=='date'){rd.type='date';try{rd.showPicker()}catch(e){}}});
+  rd.addEventListener('blur',()=>{if(!rd.value)rd.type='text'});
+  rd.addEventListener('change',e=>update(p.id,{release_date:e.target.value}));
 }
 function flushNotes(){clearTimeout(S.notesT);const n=S.pendingNotes;S.pendingNotes=null;if(n)update(n.id,{notes:n.v})}
 function openPanel(id){
@@ -1049,7 +1063,7 @@ function menuAction(b){
 
 function openSettings(){
   const s=S.settings;
-  $('#smodal').innerHTML=`<h2>Impostazioni</h2><div class="small">Cartella: ${esc(S.root)}</div>
+  $('#smodal').innerHTML=`<h2>Impostazioni</h2><div class="small">Track Tracker ${esc(S.version)} · Cartella: ${esc(S.root)}</div>
     <div class="lbl">Tracce ferme</div>
     <div class="inline">Dopo <input class="field" type="number" min="1" id="sdays" value="${s.stale_days}" style="width:80px"> giorni senza modifiche</div>
     <div class="lbl">Tag del Finder</div>

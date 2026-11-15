@@ -6,6 +6,12 @@ project_dir="${0:A:h:h}"
 app_dir="$project_dir/Apps/Track Tracker.app"
 
 cd "$project_dir"
+
+# versione: unica fonte è __version__ in track_tracker.py; la build è il numero di commit
+version=$(sed -nE 's/^__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' track_tracker.py)
+[[ -n "$version" ]] || { echo "Versione non trovata in track_tracker.py"; exit 1 }
+build_number=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+
 swift build -c release --product TrackTracker
 
 # icona: disegnata una volta sola (cancella Resources/AppIcon.png per rifarla)
@@ -24,6 +30,8 @@ rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp .build/release/TrackTracker "$app_dir/Contents/MacOS/TrackTracker"
 cp Resources/Info.plist "$app_dir/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" \
+    -c "Set :CFBundleVersion $build_number" "$app_dir/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"
 cp track_tracker.py "$app_dir/Contents/Resources/track_tracker.py"
 
@@ -34,4 +42,4 @@ touch "$app_dir"
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 [[ -x "$lsregister" ]] && "$lsregister" -f "$app_dir"
 
-echo "App pronta: $app_dir"
+echo "App pronta: $app_dir (versione $version, build $build_number)"
