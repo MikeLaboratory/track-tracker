@@ -10,6 +10,8 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+## [1.2.0] — 2026-11-17
+
 ### Aggiunto
 - Sezione **Promo** per gestire l'invio delle tracce a label, A&R e DJ:
   - board degli invii con le colonne Da ricontattare, In attesa, Interessati o supporto, Firmate, Rifiutate o senza risposta;
@@ -64,6 +66,7 @@ Prima versione con l'app per Mac.
 ### Sicurezza
 - Le altre pagine aperte nel browser non possono mandare comandi a Track Tracker.
 
-[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.1.0...HEAD
+[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/MikeLaboratory/track-tracker/releases/tag/v1.0.0

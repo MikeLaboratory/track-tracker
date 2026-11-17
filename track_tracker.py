@@ -13,7 +13,7 @@ nella stessa cartella.
 
 # Versione dell'app (MAJOR.MINOR.PATCH): è l'unico posto dove si scrive.
 # La legge anche Scripts/build-app.sh per l'app Mac; per cambiarla usa Scripts/release.sh.
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import gzip
 import json
