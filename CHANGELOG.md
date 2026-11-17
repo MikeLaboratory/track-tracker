@@ -10,6 +10,24 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+### Aggiunto
+- Sezione **Promo** per gestire l'invio delle tracce a label, A&R e DJ:
+  - board degli invii con le colonne Da ricontattare, In attesa, Interessati o supporto, Firmate, Rifiutate o senza risposta;
+  - scheda "Invii" nel pannello di ogni traccia, con tutto lo storico, e sulla card "N invii · M da ricontattare" o "Mai inviata";
+  - finestra "Nuovo invio" con messaggio compilato dai modelli: apre Mail con la mail pronta, oppure copia il testo e apre la chat di Instagram, il profilo SoundCloud o la pagina demo;
+  - promemoria di follow-up (dopo 14 giorni, modificabile) e pulsante "Ricontatta" con il messaggio di sollecito;
+  - avvisi se la traccia è in esclusiva a un'altra label o se l'hai già mandata a quel contatto;
+  - quando un invio diventa "Firmata", la traccia passa a Master e prende il nome della label.
+- Rubrica dei contatti con canali, generi, note, percentuale e tempo medio di risposta, e storico degli invii.
+- Modelli dei messaggi e giorni del follow-up modificabili nelle impostazioni.
+- **Promo ai DJ**: un invio a più DJ insieme, con un'unica mail in Ccn per chi ha l'email e un pulsante "Copia e apri" per chi è su Instagram o SoundCloud; l'esito è "Supportata" o "Nessuna risposta" e la board si filtra per Demo o Promo.
+- **Tipo di traccia** (Originale, Edit, Remix), dedotto dal nome della cartella e modificabile.
+- **Uscita pubblicata da me** (SoundCloud, Bandcamp, YouTube…) con data e link, oltre all'uscita con una label, e pulsante "Segna come pubblicata".
+- Avviso quando provi a mandare un edit come demo a una label.
+
+### Modificato
+- Contatti e invii stanno in un file a parte, `_tracker_promo.json`, nella cartella dei progetti, e seguono le tracce anche se rinomini o sposti le cartelle.
+
 ## [1.1.0] — 2026-11-15
 
 ### Aggiunto

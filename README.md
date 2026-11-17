@@ -5,7 +5,7 @@
 # Track Tracker
 
 **Sai sempre a che punto è ogni tua traccia.**<br>
-Una board per i progetti di Ableton Live: stati, note, BPM e tracce ferme da mesi, tutto in locale sul tuo Mac.
+Una board per i progetti di Ableton Live, dalla prima idea all'invio alle label: stati, note, BPM, tracce ferme e promo, tutto in locale sul tuo Mac.
 
 ![Versione](https://img.shields.io/badge/versione-1.1.0-1d1d1b?style=flat-square)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-1d1d1b?style=flat-square&logo=apple&logoColor=white)
@@ -43,23 +43,65 @@ Track Tracker legge la tua cartella dei progetti Ableton e la trasforma in una b
 | 🏷️ **Tag colorati nel Finder** | La cartella di ogni progetto prende il colore del suo stato (si può disattivare). |
 | 🔁 **Rinomini senza perdere niente** | Se rinomini o sposti una cartella, stato e note la seguono. |
 | ⌨️ **Tutto da tastiera** | Ricerca, frecce per scorrere, tasti 1–8 per lo stato, menu col tasto destro, Annulla. |
+| 📨 **Promo: a chi l'hai mandata** | Registra ogni demo alle label e ogni promo ai DJ (email, DM Instagram, SoundCloud, pagine demo) con data, link e risposta. |
+| 🎛️ **Edit e uscite fatte da te** | Ogni traccia è Originale, Edit o Remix; puoi segnarla come uscita con una label o pubblicata da te su SoundCloud, con il link. |
+| ⏰ **Follow-up ed esclusive** | Ti ricorda chi ricontattare dopo 14 giorni e ti avvisa se una traccia è in esclusiva o l'hai già mandata a quella label. |
+| 📇 **Rubrica dei contatti** | Canali, generi, note e percentuale di risposte di ogni label o persona, con tutto lo storico. |
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/details.png" alt="Il pannello dei dettagli di una traccia, con stato, note, label e data di uscita"></td>
+    <td width="50%"><img src="docs/screenshots/details.png" alt="I dettagli di un edit pubblicato da me su SoundCloud: stato, tipo di traccia, uscita e note"></td>
     <td width="50%"><img src="docs/screenshots/list.png" alt="La vista Lista con il menu del tasto destro aperto su una traccia"></td>
   </tr>
   <tr>
-    <td align="center"><sub>I dettagli di una traccia, accanto alla board</sub></td>
+    <td align="center"><sub>I dettagli di una traccia: stato, tipo (qui un edit), uscita e note</sub></td>
     <td align="center"><sub>La vista Lista e il menu del tasto destro</sub></td>
   </tr>
 </table>
+
+## 📨 Promo: dalla traccia finita alla firma
+
+Quando una traccia è pronta comincia l'altra metà del lavoro: mandarla alle label, alle A&R e ai DJ, ricordarsi chi ha risposto e chi va ricontattato. La sezione **Promo** tiene tutto in ordine.
+
+<img src="docs/screenshots/promo.png" alt="La board degli invii: colonne Da ricontattare, In attesa, Interessati o supporto, Firmate, Rifiutate o senza risposta" width="900">
+
+- **Board degli invii**: ogni invio è una card (traccia, destinatario, canale, da quanti giorni) nelle colonne *Da ricontattare*, *In attesa*, *Interessati o supporto*, *Firmate* e *Rifiutate o senza risposta*.
+- **Invii di una traccia**: nella scheda *Invii* del pannello di ogni traccia c'è tutto lo storico. Sulla card compare "3 invii · 1 da ricontattare", oppure "Mai inviata" per le tracce finite che non hai ancora mandato a nessuno.
+- **Nuovo invio**: scegli il contatto (anche uno nuovo, al volo) e il canale. Il messaggio si compila da un modello con nome, titolo, BPM e link. Con un clic si apre **Mail** con la mail pronta, oppure il messaggio viene **copiato** e si apre la chat di **Instagram**, il profilo SoundCloud o la pagina demo della label.
+- **Follow-up**: dopo 14 giorni senza risposta (si cambia in ⚙︎) l'invio passa in *Da ricontattare*. *Ricontatta* prepara il messaggio di sollecito e sposta il promemoria.
+- **Esclusive e doppioni**: se una traccia è in esclusiva a una label, o l'hai già mandata a quel contatto, te lo dice prima che tu la mandi.
+- **Firmata!**: quando segni un invio come *Firmata*, la traccia passa da sola a *Master* e prende il nome della label.
+- **Promo ai DJ**: scegli più DJ insieme e mandi un'anteprima. Chi ha l'email riceve un'unica mail in Ccn (nessuno vede gli indirizzi degli altri); per chi è solo su Instagram o SoundCloud c'è un pulsante che copia il messaggio con il suo nome e apre la chat. L'esito è *Supportata* (la suona) o *Nessuna risposta*. La board si filtra per *Demo* o *Promo*.
+- **Edit e uscite fatte da te**: il tipo di traccia (Originale, Edit, Remix) è dedotto dal nome e si cambia con un clic. Nella sezione *Uscita* scegli *Con una label* oppure *Pubblicata da me* (SoundCloud, Bandcamp, YouTube…) con data e link: *Segna come pubblicata* la porta in *Rilasciata*. Se provi a mandare un edit come demo a una label te lo ricordo: di solito non lo possono firmare senza la licenza dell'originale.
+- **Rubrica**: per ogni contatto canali, generi, note ("vogliono solo link privati"), percentuale di risposte, tempo medio di risposta e storico.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/compose.png" alt="La finestra Nuovo invio con il messaggio già compilato e l'avviso di esclusiva"></td>
+    <td width="50%"><img src="docs/screenshots/promo-djs.png" alt="La promo ai DJ: più contatti selezionati, ognuno con il suo canale"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Demo a una label: messaggio pronto e avviso di esclusiva</sub></td>
+    <td align="center"><sub>Promo ai DJ: più contatti insieme, ognuno con il suo canale</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/contacts.png" alt="La rubrica dei contatti con la scheda di una label e il suo storico"></td>
+    <td width="50%"><img src="docs/screenshots/sends.png" alt="La scheda Invii di una traccia con lo storico e l'avviso di esclusiva"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>La rubrica, con la scheda e lo storico di una label</sub></td>
+    <td align="center"><sub>Lo storico degli invii di una traccia</sub></td>
+  </tr>
+</table>
+
+L'app **non manda niente da sola**: prepara il messaggio e registra l'invio, ma l'ultimo clic su «Invia» in Mail o in Instagram resta tuo.
 
 ## 🛡️ I tuoi progetti sono al sicuro
 
 - **Non elimina mai niente.** Nel codice non c'è nessuna operazione che cancelli, sposti o rinomini file o cartelle dei progetti.
 - **Non modifica i file di Ableton.** I `.als` li legge soltanto, per trovare il BPM.
-- **Tutto resta sul tuo Mac.** Niente account, niente cloud, niente connessione a internet.
+- **Tutto resta sul tuo Mac.** Niente account, niente cloud: Track Tracker non si collega a internet. Apre Mail, Instagram o una pagina web solo quando premi tu il pulsante di un invio.
+- **Non scrive a nessuno al posto tuo.** Prepara i messaggi, ma l'invio vero lo fai tu.
 - **Nessun altro può comandarlo.** Risponde solo al tuo computer, e le altre pagine aperte nel browser non possono mandargli comandi.
 
 ## Requisiti
@@ -134,10 +176,13 @@ Cosa è cambiato in ogni versione lo trovi nel [registro delle modifiche](CHANGE
 | Cosa | Dove | Quando |
 |---|---|---|
 | `_tracker_data.json`: stati, note, label, date e impostazioni | nella cartella dei progetti | quando cambi qualcosa nella board |
+| `_tracker_promo.json`: contatti, invii e modelli dei messaggi | nella cartella dei progetti | quando registri un invio o modifichi un contatto |
 | Tag colorati del Finder | sulle cartelle dei progetti | quando cambi stato (si disattiva in ⚙︎) |
 | La cartella scelta | nelle preferenze dell'app (`com.tracktracker.app`) | quando la scegli |
 | `Avvia Track Tracker.command` | nella cartella dei progetti | solo usando il file Python dal Terminale, al primo avvio |
 | L'app compilata | in `Apps/` dentro `track-tracker` | quando lanci `build-app.sh` |
+
+`_tracker_promo.json` contiene email e profili di altre persone: se condividi la cartella dei progetti con qualcuno (per esempio su un disco in comune o in cloud), ricordati che dentro c'è anche la tua rubrica.
 
 I tag del Finder usano questi colori. Il Finder ne ha solo 7, quindi "Idea" è un tag senza colore:
 

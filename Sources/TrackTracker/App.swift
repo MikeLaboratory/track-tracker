@@ -244,12 +244,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.checking, webView.url?.host == "127.0.0.1" else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            // conta colonne e card, e prova un salvataggio (rimette le impostazioni come sono)
+            // conta colonne e card, prova un salvataggio (rimette le impostazioni come sono)
+            // e controlla che la board degli invii mostri tutti gli invii salvati
             let js = """
                 const s = await api('/api/settings', {stale_days: S.settings.stale_days});
-                return JSON.stringify({cols: document.querySelectorAll('.col').length,
+                const r = {cols: document.querySelectorAll('.col').length,
                     cards: document.querySelectorAll('.card').length,
-                    count: document.getElementById('count').textContent, saved: !!s.settings});
+                    count: document.getElementById('count').textContent, saved: !!s.settings};
+                setMode('promo');
+                r.promo = document.querySelectorAll('.scard').length === S.promo.sends.length;
+                r.sends = S.promo.sends.length;
+                setMode('tracks');
+                return JSON.stringify(r);
                 """
             webView.callAsyncJavaScript(js, in: nil, in: .page) { result in
                 let text: String
@@ -258,6 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
                 case .failure(let error): text = "errore: \(error.localizedDescription)"
                 }
                 let ok = text.contains("\"cols\":8") && !text.contains("\"cards\":0") && text.contains("\"saved\":true")
+                    && text.contains("\"promo\":true")
                 fputs((ok ? "Avvio verificato: " : "Verifica non riuscita: ") + text + "\n", stderr)
                 if ok { NSApp.terminate(nil) } else { exit(1) }
             }

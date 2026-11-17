@@ -74,6 +74,11 @@ STRIP_END = re.compile(
     r"master(ed)?|finit[ao]|done|finished|released|rilasciat[ao]|idea|sketch|bozza|wip|"
     r"arrang(iamento)?|stuck)$")
 RELEASE_DIR = re.compile(r"(?i)released|rilasciat[ea]|uscit[ea]")
+# tipo di traccia: un edit (o bootleg) di solito si pubblica da sé, non lo firma una label
+TRACK_KINDS = {"original", "edit", "remix"}
+KIND_RULES = [(re.compile(r"(?i)edit|bootleg|flip"), "edit"), (re.compile(r"(?i)remix|rmx"), "remix")]
+RELEASE_KINDS = {"", "label", "self"}  # non ancora / con una label / pubblicata da me
+PLATFORMS = {"soundcloud", "bandcamp", "youtube", "altro"}
 
 LOCK = threading.Lock()
 
@@ -102,7 +107,61 @@ def save_data(d):
 DATA = load_data()
 
 
+# ---------------------------------------------------------------- dati promo (invii e contatti)
+# In un file a parte perché contiene dati personali di altre persone (email, profili).
+
+PROMO_FILE = ROOT / "_tracker_promo.json"
+CONTACT_TYPES = {"label", "ar", "dj", "promoter", "altro"}
+CHANNELS = {"email", "instagram", "soundcloud", "website", "altro"}
+# attesa → in attesa di risposta; "da ricontattare" non è uno stato salvato:
+# è un invio in attesa con la data di follow-up già passata.
+SEND_STATUSES = {"attesa", "interessati", "supportata", "firmata", "rifiutata", "nessuna"}
+# demo: proposta a una label o a un A&R; promo: anteprima a un DJ perché la suoni
+SEND_KINDS = {"demo", "promo"}
+DEFAULT_TEMPLATES = {
+    "email_subject": "Demo: {artista} – {titolo}",
+    "email_body": "Ciao {nome},\n\nsono {artista}: ti mando {titolo}, una traccia a {bpm} BPM che secondo me "
+                  "starebbe bene nel vostro catalogo.\n\nAscolto privato: {link}\n\nGrazie dell'ascolto!\n{artista}",
+    "dm_body": "Ciao {nome}! Sono {artista}, ti va di ascoltare la mia nuova traccia {titolo}? {link}",
+    "followup_body": "Ciao {nome}, ti riscrivo per sapere se hai avuto modo di ascoltare {titolo}: {link}\nGrazie!",
+    "promo_subject": "Promo: {artista} – {titolo}",
+    "promo_body": "Ciao {nome}! Ti mando in anteprima {titolo}{uscita}. Se ti piace e la suoni fammelo sapere, mi fa un sacco piacere!\n\n{link}\n\n{artista}",
+}
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def load_promo():
+    try:
+        p = json.loads(PROMO_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        p = {}
+    p.setdefault("contacts", {})
+    p.setdefault("sends", {})
+    s = p.setdefault("settings", {})
+    s.setdefault("followup_days", 14)
+    t = s.setdefault("templates", {})
+    for k, v in DEFAULT_TEMPLATES.items():
+        t.setdefault(k, v)
+    return p
+
+
+def save_promo(p):
+    tmp = PROMO_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(p, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, PROMO_FILE)
+
+
+PROMO = load_promo()
+
+
 # ---------------------------------------------------------------- scansione
+
+def guess_kind(name):
+    for pat, kind in KIND_RULES:
+        if pat.search(name):
+            return kind
+    return "original"
+
 
 def guess_status(name):
     up = name.upper()
@@ -229,6 +288,7 @@ def reconcile(base):
     Gli orfani senza abbinamento restano nel JSON (il disco potrebbe essere scollegato)."""
     saved = DATA["projects"]
     changed = False
+    moved = {}  # vecchio id → nuovo id, per spostare anche gli invii
     orphans = {rid: e for rid, e in saved.items() if rid not in base}
     new = {rid: b for rid, b in base.items() if rid not in saved}
     if orphans and new:
@@ -237,6 +297,7 @@ def reconcile(base):
             nid = new_by_ino.get(e.get("ino"))
             if nid in new:
                 saved[nid] = saved.pop(oid)
+                moved[oid] = nid
                 del new[nid], orphans[oid]
                 changed = True
         old_by_als = _unique_by((oid, e["als_name"]) for oid, e in orphans.items()
@@ -245,7 +306,13 @@ def reconcile(base):
         for name, oid in old_by_als.items():
             if name in new_by_als:
                 saved[new_by_als[name]] = saved.pop(oid)
+                moved[oid] = new_by_als[name]
                 changed = True
+    if moved:
+        for s in PROMO["sends"].values():
+            if s.get("project") in moved:
+                s["project"] = moved[s["project"]]
+        save_promo(PROMO)
     # tieni aggiornata l'impronta dei progetti che conosciamo
     for rid, e in saved.items():
         b = base.get(rid)
@@ -282,6 +349,13 @@ def scan(fresh=False):
                 notes=saved.get("notes", ""),
                 label=saved.get("label", ""),
                 release_date=saved.get("release_date", ""),
+                link=saved.get("link", ""),
+                kind=saved.get("kind") if saved.get("kind") in TRACK_KINDS else guess_kind(p["folder"]),
+                kind_source="manual" if saved.get("kind") in TRACK_KINDS else "auto",
+                # chi non ha mai scelto ma ha una label: uscita con label
+                release_kind=saved.get("release_kind", "label" if saved.get("label") else ""),
+                release_platform=saved.get("release_platform", "soundcloud"),
+                release_link=saved.get("release_link", ""),
             )
             projects[rel] = p
     return projects
@@ -324,6 +398,7 @@ def payload(fresh=False):
         "statuses": [{"key": k, "label": l} for k, l, _ in STATUSES],
         "settings": DATA["settings"],
         "projects": sorted(projects.values(), key=lambda p: -p["mtime"]),
+        "promo": promo_payload(),
     }
 
 
@@ -332,20 +407,30 @@ def update_project(body):
     projects = scan()
     if pid not in projects:
         raise ValueError("Progetto non trovato")
+    # prima si controlla tutto, poi si cambia: un valore sbagliato non lascia modifiche a metà
+    checks = (("kind", TRACK_KINDS | {""}, "Tipo di traccia non valido"),
+              ("release_kind", RELEASE_KINDS, "Tipo di uscita non valido"),
+              ("release_platform", PLATFORMS, "Piattaforma non valida"),
+              ("status", STATUS_KEYS | {""}, "Stato non valido"))
+    for field, allowed, message in checks:
+        if field in body and (body[field] or "") not in allowed:
+            raise ValueError(message)
     warning = None
     with LOCK:
         entry = DATA["projects"].setdefault(pid, {})
-        for field in ("notes", "label", "release_date"):
+        for field in ("notes", "label", "release_date", "release_link"):
             if field in body:
                 entry[field] = str(body[field])[:20000]
-        if "status" in body:
-            status = body["status"] or ""  # "" = torna allo stato dedotto dal nome
-            if status and status not in STATUS_KEYS:
-                raise ValueError("Stato non valido")
-            if status:
-                entry["status"] = status
-            else:
-                entry.pop("status", None)
+        for field in ("release_kind", "release_platform"):
+            if field in body:
+                entry[field] = body[field]
+        # "" = torna al valore dedotto dal nome della cartella
+        for field in ("kind", "status"):
+            if field in body:
+                if body[field]:
+                    entry[field] = body[field]
+                else:
+                    entry.pop(field, None)
         save_data(DATA)
     p = scan()[pid]
     if "status" in body and DATA["settings"].get("finder_tags"):
@@ -393,11 +478,203 @@ def sync_tags(_body):
     return {"ok": ok, "errors": errors}
 
 
+# ---------------------------------------------------------------- API promo
+
+def _text(value, limit):
+    return str(value or "").strip()[:limit]
+
+
+def _date(value, field):
+    value = _text(value, 10)
+    if value and not DATE_RE.match(value):
+        raise ValueError(f"Data non valida ({field})")
+    return value
+
+
+def _today():
+    return time.strftime("%Y-%m-%d")
+
+
+def promo_payload():
+    with LOCK:
+        return {
+            "contacts": sorted(PROMO["contacts"].values(), key=lambda c: c["name"].lower()),
+            "sends": sorted(PROMO["sends"].values(), key=lambda s: (s["date"], s["created"]), reverse=True),
+            "settings": PROMO["settings"],
+            "today": _today(),
+        }
+
+
+CONTACT_TEXT = {"name": 200, "org": 200, "email": 300, "instagram": 100, "soundcloud": 300,
+                "website": 500, "notes": 20000}
+
+
+def save_contact(body):
+    """Crea (senza id) o aggiorna un contatto: label, A&R, DJ, promoter…"""
+    upd = {f: _text(body[f], n) for f, n in CONTACT_TEXT.items() if f in body}
+    if "name" in upd and not upd["name"]:
+        raise ValueError("Il contatto deve avere un nome")
+    if "instagram" in upd:
+        upd["instagram"] = upd["instagram"].lstrip("@")
+    if "type" in body:
+        if body["type"] not in CONTACT_TYPES:
+            raise ValueError("Tipo di contatto non valido")
+        upd["type"] = body["type"]
+    if "genres" in body:
+        genres = body["genres"].split(",") if isinstance(body["genres"], str) else list(body["genres"])
+        upd["genres"] = [str(g).strip()[:40] for g in genres if str(g).strip()][:12]
+    with LOCK:
+        cid = body.get("id")
+        if cid:
+            contact = PROMO["contacts"].get(cid)
+            if not contact:
+                raise ValueError("Contatto non trovato")
+        else:
+            if not upd.get("name"):
+                raise ValueError("Scrivi il nome del contatto")
+            cid = os.urandom(5).hex()
+            contact = {"id": cid, "name": "", "type": "label", "org": "", "email": "", "instagram": "",
+                       "soundcloud": "", "website": "", "genres": [], "notes": "", "created": time.time()}
+            PROMO["contacts"][cid] = contact
+        contact.update(upd)
+        save_promo(PROMO)
+        return {"contact": contact}
+
+
+def delete_contact(body):
+    with LOCK:
+        cid = body.get("id")
+        if cid not in PROMO["contacts"]:
+            raise ValueError("Contatto non trovato")
+        n = sum(1 for s in PROMO["sends"].values() if s["contact"] == cid)
+        if n:
+            raise ValueError(f"Ha {n} {'invio registrato' if n == 1 else 'invii registrati'}: "
+                             "non lo elimino, così non perdi lo storico")
+        del PROMO["contacts"][cid]
+        save_promo(PROMO)
+    return {"ok": True}
+
+
+def save_send(body):
+    """Registra (senza id) o aggiorna un invio di una traccia a un contatto.
+    Quando un invio diventa "firmata", la traccia passa a Master e prende la label."""
+    projects = scan()
+    upd = {}
+    if "kind" in body:
+        if body["kind"] not in SEND_KINDS:
+            raise ValueError("Tipo di invio non valido")
+        upd["kind"] = body["kind"]
+    if "channel" in body:
+        if body["channel"] not in CHANNELS:
+            raise ValueError("Canale non valido")
+        upd["channel"] = body["channel"]
+    if "status" in body:
+        if body["status"] not in SEND_STATUSES:
+            raise ValueError("Stato dell'invio non valido")
+        upd["status"] = body["status"]
+    for f in ("date", "followup", "reply_date", "exclusive_until"):
+        if f in body:
+            upd[f] = _date(body[f], f)
+    for f, n in (("link", 1000), ("reply_note", 5000), ("notes", 20000)):
+        if f in body:
+            upd[f] = _text(body[f], n)
+    signed = False
+    with LOCK:
+        if "contact" in body and body["contact"] not in PROMO["contacts"]:
+            raise ValueError("Scegli a chi l'hai mandata")
+        if "contact" in body:
+            upd["contact"] = body["contact"]
+        sid = body.get("id")
+        if sid:
+            send = PROMO["sends"].get(sid)
+            if not send:
+                raise ValueError("Invio non trovato")
+            old_status = send["status"]
+        else:
+            pid = body.get("project")
+            if pid not in projects:
+                raise ValueError("Traccia non trovata")
+            if "contact" not in upd:
+                raise ValueError("Scegli a chi l'hai mandata")
+            send = {"id": os.urandom(5).hex(), "project": pid, "title": projects[pid]["name"],
+                    "contact": "", "kind": "demo", "channel": "email", "link": "", "date": _today(), "followup": "",
+                    "status": "attesa", "reply_date": "", "reply_note": "", "notes": "",
+                    "exclusive_until": "", "followups": [], "created": time.time()}
+            old_status = None
+        send.update(upd)
+        send["date"] = send["date"] or _today()
+        if body.get("add_followup"):  # l'hai ricontattato oggi
+            send["followups"] = send["followups"] + [_today()]
+        if send["status"] != "attesa" and old_status in (None, "attesa") and not send["reply_date"]:
+            send["reply_date"] = _today()
+        PROMO["sends"][send["id"]] = send
+        # la voce del progetto serve anche a ritrovare gli invii se rinomini la cartella
+        entry = DATA["projects"].setdefault(send["project"], {})
+        if send["link"]:
+            entry["link"] = send["link"]
+        if send["status"] == "firmata" and old_status != "firmata":
+            signed = True
+            current = projects.get(send["project"])
+            if current and current["status"] not in ("master", "rilasciata"):
+                entry["status"] = "master"
+            contact = PROMO["contacts"][send["contact"]]
+            if contact["type"] == "label" and not entry.get("label"):
+                entry["label"] = contact["name"]
+        save_promo(PROMO)
+        save_data(DATA)
+    project = scan().get(send["project"])
+    warning = None
+    if signed and project and DATA["settings"].get("finder_tags"):
+        try:
+            apply_status_tag(project["path"], project["status"])
+        except Exception as e:
+            warning = f"Tag Finder non applicato: {e}"
+    return {"send": send, "project": project, "signed": signed, "warning": warning}
+
+
+def delete_send(body):
+    with LOCK:
+        if body.get("id") not in PROMO["sends"]:
+            raise ValueError("Invio non trovato")
+        del PROMO["sends"][body["id"]]
+        save_promo(PROMO)
+    return {"ok": True}
+
+
+def update_promo_settings(body):
+    with LOCK:
+        s = PROMO["settings"]
+        if "followup_days" in body:
+            s["followup_days"] = max(1, min(365, int(body["followup_days"])))
+        for key, value in dict(body.get("templates") or {}).items():
+            if key in DEFAULT_TEMPLATES:
+                s["templates"][key] = _text(value, 5000) or DEFAULT_TEMPLATES[key]
+        save_promo(PROMO)
+        return {"settings": s}
+
+
+def open_link(body):
+    """Apre una mail già scritta (mailto:) o una pagina web (https://) con l'app predefinita."""
+    url = _text(body.get("url"), 8000)
+    if not re.match(r"(?i)^(mailto:|https://)", url):
+        raise ValueError("Link non supportato")
+    if not IS_MAC:
+        raise ValueError("Funziona solo su Mac")
+    subprocess.run(["open", url], check=True)
+    return {"ok": True}
+
+
 ROUTES = {
     "/api/update": update_project,
     "/api/open": open_project,
     "/api/settings": update_settings,
     "/api/sync_tags": sync_tags,
+    "/api/contact": save_contact,
+    "/api/contact_delete": delete_contact,
+    "/api/send": save_send,
+    "/api/send_delete": delete_send,
+    "/api/promo_settings": update_promo_settings,
+    "/api/open_link": open_link,
 }
 
 
@@ -728,6 +1005,82 @@ body.panel-open .search input{width:190px}
 kbd{font:11.5px -apple-system,sans-serif;color:var(--text);background:#ffffff10;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:1px 6px;white-space:nowrap}
 .m-foot{display:flex;justify-content:flex-end;margin-top:22px}
 
+/* promo: invii e contatti */
+body.mode-promo .tracks-only,body.mode-contacts .tracks-only{display:none}
+body.mode-tracks .promo-only{display:none}
+.nav.due .nc{color:var(--warn)}
+.chan{display:inline-flex;align-items:center;gap:5px;color:var(--soft)}
+.chan svg{width:13px;height:13px}
+.st{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--c);background:#ffffff0a;border:1px solid #ffffff12;border-radius:999px;padding:1px 9px 1px 7px;white-space:nowrap}
+.st::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
+.who{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+.who b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.who small{color:var(--mute);white-space:nowrap}
+.avatar{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;background:var(--a);flex:none}
+.scard .cname{font-size:13px}
+.excl{color:#d9b3f5}
+.pill.sends-b{color:#6cb4ff}
+.pill.sends-b.has-due{color:var(--warn);background:#ffb34017;border-color:#ffb34030}
+.pill.never{color:var(--dim)}
+.ptabs{display:flex;gap:4px;margin-top:16px;border-bottom:1px solid var(--line)}
+.ptabs button{padding:7px 10px;color:var(--mute);border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.ptabs button:hover{color:var(--text)}
+.ptabs button.on{color:var(--text);border-bottom-color:var(--accent)}
+.ptabs .n{margin-left:5px}
+.note-box{display:flex;gap:9px;align-items:flex-start;margin-top:14px;background:#bf5af214;border:1px solid #bf5af238;color:#d9b3f5;border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.45}
+.note-box svg,.warnbox svg{margin-top:1px}
+.sends{margin-top:12px}
+.send{position:relative;padding:11px 8px 11px 22px;border-left:2px solid var(--line);margin-left:6px;cursor:pointer;border-radius:0 8px 8px 0}
+.send:hover{background:#ffffff06}
+.send::before{content:"";position:absolute;left:-6px;top:15px;width:10px;height:10px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px #18181b}
+.send-top{display:flex;align-items:center;gap:8px}
+.send-top b{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.send-meta{display:flex;flex-wrap:wrap;gap:3px 12px;color:var(--mute);font-size:11.5px;margin-top:4px}
+.send-note{margin-top:5px;color:#b3b3bb;font-size:12px;white-space:pre-line;word-break:break-word}
+.send-act{display:flex;gap:6px;margin-top:8px}
+.due{color:var(--warn)}
+.btn.sm{padding:4px 9px;font-size:12px;border-radius:7px}
+.btn.danger{color:#ff6961}
+.btn:disabled{opacity:.45;cursor:default}
+.modal.wide{width:min(640px,100%)}
+.f2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.f3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.seg2{display:flex;flex-wrap:wrap;gap:6px}
+.seg2 button{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--raise);color:var(--soft)}
+.seg2 button:hover{border-color:var(--line2)}
+.seg2 button.on{border-color:var(--accent);color:#fff;box-shadow:inset 0 0 0 1px var(--accent)}
+.seg2 svg{width:14px;height:14px}
+textarea.msg{min-height:150px;font-size:12.5px}
+textarea.short{min-height:64px}
+.warnbox{display:flex;gap:9px;align-items:flex-start;margin-top:14px;background:#ffb34012;border:1px solid #ffb34030;color:var(--warn);border-radius:9px;padding:9px 11px;font-size:12px;line-height:1.45}
+.m-foot2{display:flex;gap:8px;align-items:center;margin-top:20px;flex-wrap:wrap}
+.m-foot2 .grow{flex:1}
+.m-hint{margin-top:14px;font-size:11.5px;color:var(--dim)}
+.genre{display:inline-block;font-size:11px;color:var(--soft);background:#ffffff0d;border:1px solid #ffffff10;border-radius:5px;padding:0 6px;margin:1px 3px 1px 0}
+.icons{display:inline-flex;gap:7px;color:var(--mute)}
+.icons svg{width:14px;height:14px}
+.rate small{color:var(--dim)}
+.cf{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px}
+.cf label,.tpl{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--mute)}
+.tpl{margin-top:10px}
+.newc{margin-top:10px;padding:12px;border:1px dashed var(--line2);border-radius:9px}
+select.field{height:34px}
+.pill.kind{color:#e0b3ff;background:#bf5af214;border-color:#bf5af230}
+.pill.promo-p{color:#7fd8ff;background:#64d2ff14;border-color:#64d2ff30}
+body:not(.mode-promo) .promo-board-only{display:none}
+.rlist{max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:9px;background:var(--raise)}
+.rrow{display:flex;align-items:center;gap:9px;padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+.rrow:last-child{border-bottom:0}
+.rrow:hover{background:#ffffff06}
+.rrow input{accent-color:var(--accent);margin:0}
+.rname2{flex:1;min-width:0;display:flex;flex-direction:column}
+.rname2 b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rname2 small{color:var(--mute);font-size:11px}
+.via{display:inline-flex;gap:5px;align-items:center;font-size:11.5px;color:var(--mute);white-space:nowrap}
+.via svg{width:13px;height:13px}
+.relrow{display:flex;gap:6px}
+.picker{display:flex;align-items:center;gap:9px;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+
 /* stati vuoti */
 .empty{height:100%;min-height:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--mute);text-align:center;padding:40px}
 .empty .big{font-size:16px;color:var(--text);font-weight:600}
@@ -762,8 +1115,10 @@ kbd{font:11.5px -apple-system,sans-serif;color:var(--text);background:#ffffff10;
       <button class="ib side-btn" id="sideBtn" title="Mostra filtri" data-i="menu"></button>
       <div class="ttl"><h1 id="title">Tutte le tracce</h1><span id="count"></span></div>
       <label class="search"><span data-i="search"></span><input id="q" placeholder="Cerca tracce e note" autocomplete="off" spellcheck="false"><kbd id="qkey">⌘F</kbd></label>
-      <select class="dd" id="sort" title="Ordina"></select>
-      <div class="seg"><button data-view="board" data-i="board"> Board</button><button data-view="list" data-i="list"> Lista</button></div>
+      <select class="dd tracks-only" id="sort" title="Ordina"></select>
+      <div class="seg tracks-only"><button data-view="board" data-i="board"> Board</button><button data-view="list" data-i="list"> Lista</button></div>
+      <div class="seg promo-board-only" id="pkSeg"><button data-pk="all">Tutti</button><button data-pk="demo">Demo</button><button data-pk="promo">Promo</button></div>
+      <button class="btn primary promo-only" id="tbAction"></button>
       <button class="ib" id="reload" title="Rileggi la cartella" data-i="refresh"></button>
     </header>
     <main id="main"></main>
@@ -771,7 +1126,10 @@ kbd{font:11.5px -apple-system,sans-serif;color:var(--text);background:#ffffff10;
 </div>
 <aside class="panel" id="panel"></aside>
 <div class="menu" id="menu"></div>
-<div class="overlay" id="ovs"><div class="modal" id="smodal"></div></div>
+<div class="overlay" id="ovs"><div class="modal wide" id="smodal"></div></div>
+<div class="overlay" id="ovSend"><div class="modal wide" id="sendModal"></div></div>
+<div class="overlay" id="ovC"><div class="modal" id="cModal"></div></div>
+<div class="overlay" id="ovQ"><div class="modal" id="qModal"></div></div>
 <div class="toast" id="toast"><span id="toastMsg"></span><button id="toastBtn"></button></div>
 
 <script>
@@ -793,6 +1151,15 @@ const ICON={
  wand:'<svg viewBox="0 0 16 16"><path d="m2.5 13.5 8-8M11.5 2v2.5M11.5 7v.5M9 4.5h-.5M14.5 4.5H14"/></svg>',
  collapse:'<svg viewBox="0 0 16 16"><path d="M10 4 6 8l4 4"/></svg>',
  menu:'<svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>',
+ send:'<svg viewBox="0 0 16 16"><path d="M2 8.5 14 3l-3.5 11-2.6-4.4z"/><path d="m7.9 9.6 2.6-2.6"/></svg>',
+ mail:'<svg viewBox="0 0 16 16"><rect x="1.75" y="3.25" width="12.5" height="9.5" rx="1.5"/><path d="m2.25 4 5.75 4.5L13.75 4"/></svg>',
+ ig:'<svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="3.5"/><circle cx="8" cy="8" r="2.8"/><circle cx="11.4" cy="4.6" r=".6" fill="currentColor"/></svg>',
+ cloud:'<svg viewBox="0 0 16 16"><path d="M4.5 12.5h7.25a2.75 2.75 0 0 0 .3-5.48 4 4 0 0 0-7.7-.8A2.9 2.9 0 0 0 4.5 12.5z"/></svg>',
+ globe:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6s-.8 4.3-2.6 6c-1.8-1.7-2.6-3.7-2.6-6S6.2 3.7 8 2z"/></svg>',
+ book:'<svg viewBox="0 0 16 16"><rect x="2.5" y="2" width="11" height="12" rx="2"/><circle cx="8" cy="6.75" r="1.9"/><path d="M5 11.5c.6-1.4 1.7-2.1 3-2.1s2.4.7 3 2.1"/></svg>',
+ plus:'<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>',
+ warn:'<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5v4.25"/><circle cx="8" cy="11" r=".6" fill="currentColor"/></svg>',
+ edit:'<svg viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>',
 };
 const MAC=/Mac|iPhone|iPad/i.test(navigator.platform||navigator.userAgent);
 const CMD=MAC?'⌘':'Ctrl+';
@@ -803,7 +1170,10 @@ function storedSet(k){try{return new Set(JSON.parse(store(k)||'[]'))}catch(e){re
 const SORTS={'mtime:-1':'Più recenti','mtime:1':'Meno recenti','name:1':'Nome','bpm:-1':'BPM','status:1':'Stato'};
 const S={projects:[],statuses:[],settings:{stale_days:60},root:'',aliasN:0,loaded:false,error:'',
   alias:'__all',filter:'all',q:'',view:store('view')==='list'?'list':'board',sort:store('sort')||'mtime:-1',
-  openId:null,menuId:null,pendingNotes:null,notesT:null,collapsed:storedSet('collapsed'),expanded:storedSet('expanded')};
+  openId:null,menuId:null,pendingNotes:null,notesT:null,collapsed:storedSet('collapsed'),expanded:storedSet('expanded'),
+  // promo: mode = tracks | promo | contacts
+  mode:'tracks',promoFilter:'all',promoKind:'all',ptab:'details',openContact:null,compose:null,
+  promo:{contacts:[],sends:[],settings:{followup_days:14,templates:{}},today:''}};
 // prima apertura: "Rilasciata" fa da archivio, quindi parte compressa
 if(store('collapsed')===null)S.collapsed.add('rilasciata');
 if(!SORTS[S.sort])S.sort='mtime:-1';
@@ -815,7 +1185,67 @@ const isTyping=a=>!!a&&(a.tagName==='TEXTAREA'||a.tagName==='SELECT'||(a.tagName
 
 function ago(d){if(d<=0)return'oggi';if(d===1)return'ieri';if(d<45)return d+' giorni fa';if(d<365)return Math.round(d/30)+' mesi fa';const y=Math.floor(d/365);return y===1?'1 anno fa':y+' anni fa'}
 function fmtDate(s){const d=new Date(s+'T00:00:00');return isNaN(d)?s:d.toLocaleDateString('it-IT',{day:'numeric',month:'short',year:'numeric'})}
-function releaseText(p){const parts=[];if(p.release_date)parts.push((new Date(p.release_date+'T00:00:00')>new Date()?'Esce il ':'Uscita il ')+fmtDate(p.release_date));if(p.label)parts.push(p.label);return parts.join(' · ')}
+const KINDS={original:'Originale',edit:'Edit',remix:'Remix'};
+const PLAT={soundcloud:'SoundCloud',bandcamp:'Bandcamp',youtube:'YouTube',altro:'online'};
+function releaseText(p){
+  const parts=[];
+  if(p.release_date)parts.push((new Date(p.release_date+'T00:00:00')>new Date()?'Esce il ':'Uscita il ')+fmtDate(p.release_date));
+  if(p.release_kind==='self')parts.push((parts.length?'':'Pubblicata ')+'da me su '+(PLAT[p.release_platform]||'online'));
+  else if(p.label)parts.push(p.label);
+  return parts.join(' · ');
+}
+
+// ------------------------------------------------------------ promo: dati e testi
+const CH={email:{l:'Email',i:'mail'},instagram:{l:'DM Instagram',i:'ig'},soundcloud:{l:'SoundCloud',i:'cloud'},website:{l:'Sito demo',i:'globe'},altro:{l:'Altro',i:'send'}};
+const SST={attesa:{l:'In attesa',c:'#0a84ff'},interessati:{l:'Interessati',c:'#bf5af2'},supportata:{l:'Supportata',c:'#64d2ff'},
+  firmata:{l:'Firmata',c:'#30d158'},rifiutata:{l:'Rifiutata',c:'#ff453a'},nessuna:{l:'Nessuna risposta',c:'#8e8e93'}};
+const DUE_C='#ffb340';
+const CTYPES={label:'Label',ar:'A&R',dj:'DJ',promoter:'Promoter',altro:'Altro'};
+const PCOLS=[['due','Da ricontattare',DUE_C],['attesa','In attesa','#0a84ff'],['interessati','Interessati o supporto','#bf5af2'],
+  ['firmata','Firmate','#30d158'],['chiuse','Rifiutate o senza risposta','#ff453a']];
+const ANSWERED=['interessati','supportata','firmata','rifiutata'];
+const contactById=id=>S.promo.contacts.find(c=>c.id===id);
+const sendsOf=pid=>S.promo.sends.filter(s=>s.project===pid);
+const isDue=s=>s.status==='attesa'&&!!s.followup&&s.followup<=S.promo.today;
+const sendCol=s=>isDue(s)?'due':s.status==='attesa'?'attesa':(s.status==='interessati'||s.status==='supportata')?'interessati':s.status==='firmata'?'firmata':'chiuse';
+const sendColor=s=>isDue(s)?DUE_C:(SST[s.status]||SST.attesa).c;
+const sendLabel=s=>isDue(s)?'Da ricontattare':s.kind==='promo'&&s.status==='attesa'?'Inviata':(SST[s.status]||SST.attesa).l;
+const AV=['#0e7490','#b45309','#5e5ce6','#7c3aed','#be185d','#c2410c','#15803d','#475569','#0369a1','#a21caf'];
+function avatar(c){
+  const n=(c&&c.name)||'?';let h=0;for(const ch of n)h=(h*31+ch.charCodeAt(0))>>>0;
+  const ini=n.split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase()||'?';
+  return `<span class="avatar" style="--a:${AV[h%AV.length]}">${esc(ini)}</span>`;
+}
+const pad=n=>String(n).padStart(2,'0');
+const isoLocal=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+function addDays(s,n){const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return isoLocal(d)}
+function dayDiff(a,b){return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/864e5)}
+const agoDate=s=>s?ago(dayDiff(s,S.promo.today)):'';
+function shortDate(s){const d=new Date(s+'T00:00:00');return isNaN(d)?s:d.toLocaleDateString('it-IT',{day:'numeric',month:'short'})}
+// "il 30 nov" ma "l'11 nov", "l'1", "l'8"; "al 30" ma "all'11"
+const vowelDay=s=>[1,8,11].includes(new Date(s+'T00:00:00').getDate());
+const ilDate=s=>(vowelDay(s)?"l'":'il ')+shortDate(s);
+const alDate=s=>(vowelDay(s)?"all'":'al ')+shortDate(s);
+function inDays(s){const n=dayDiff(S.promo.today,s);return n<=0?'oggi':n===1?'domani':'tra '+n+' giorni'}
+function dueText(s){const n=dayDiff(s.followup,S.promo.today);return n<=0?'Follow-up oggi':'Follow-up scaduto da '+n+(n===1?' giorno':' giorni')}
+const contactSub=c=>[CTYPES[c.type]||'',c.org].filter(Boolean).join(' · ');
+const chAddr=(c,ch)=>!c?'':ch==='email'?c.email:ch==='instagram'?c.instagram:ch==='soundcloud'?c.soundcloud:ch==='website'?c.website:'';
+// invii ancora aperti con un'esclusiva valida (escluso un contatto, se serve)
+const exclusivesFor=(pid,except)=>sendsOf(pid).filter(s=>s.exclusive_until&&s.exclusive_until>=S.promo.today
+  &&(s.status==='attesa'||s.status==='interessati')&&s.contact!==except);
+const fill=(t,ctx)=>String(t||'').replace(/\{(\w+)\}/g,(m,k)=>k in ctx?String(ctx[k]):m);
+function copyText(t){
+  // prima la copia "classica" (funziona dentro il clic), poi l'API moderna
+  let ok=false;const ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');
+  ta.style.cssText='position:fixed;top:-1000px;opacity:0';document.body.appendChild(ta);ta.select();
+  try{ok=document.execCommand('copy')}catch(e){}ta.remove();
+  if(ok)return Promise.resolve(true);
+  return navigator.clipboard?navigator.clipboard.writeText(t).then(()=>true,()=>false):Promise.resolve(false);
+}
+async function openLink(url){
+  try{await api('/api/open_link',{url})}
+  catch(e){if(/solo su Mac/.test(e.message))window.open(url,'_blank');else throw e}
+}
 
 async function api(path,body){
   const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
@@ -836,13 +1266,13 @@ function hideToast(){$('#toast').classList.remove('show')}
 async function load(fresh){
   try{
     const d=await api('/api/projects'+(fresh?'?fresh=1':''));
-    Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,version:d.version,loaded:true,error:''});
+    Object.assign(S,{projects:d.projects,statuses:d.statuses,settings:d.settings,root:d.root,version:d.version,promo:d.promo,loaded:true,error:''});
     $('#brand').title='Track Tracker '+d.version;
   }catch(e){S.error=e.message;S.loaded=true}
   S.aliasN=new Set(S.projects.map(p=>p.alias)).size;
   if(S.alias!=='__all'&&!S.projects.some(p=>p.alias===S.alias))S.alias='__all';
   render();
-  if(S.openId){byId(S.openId)?renderPanel():closePanel()}
+  if(S.openId||S.openContact){(S.openId?byId(S.openId):contactById(S.openContact))?renderPanel():closePanel()}
 }
 
 // ------------------------------------------------------------ filtri e ordine
@@ -866,7 +1296,15 @@ function visibleOrder(){
 }
 
 // ------------------------------------------------------------ disegno
-function render(){renderSide();renderToolbar();renderMain()}
+function render(){
+  document.body.classList.remove('mode-tracks','mode-promo','mode-contacts');
+  document.body.classList.add('mode-'+S.mode);
+  renderSide();renderToolbar();renderMain();
+}
+function setMode(mode,pf){
+  if(S.mode!==mode)closePanel();
+  S.mode=mode;S.promoFilter=pf||'all';render();
+}
 
 function renderSide(){
   const inA=S.projects.filter(p=>S.alias==='__all'||p.alias===S.alias);
@@ -876,11 +1314,16 @@ function renderSide(){
     `<span style="--c:var(--${s.key});flex:${cnt[s.key]}" title="${esc(s.label)}: ${cnt[s.key]}"></span>`).join('')}</div>
     <div class="stackinfo">${done} di ${inA.length} finite o rilasciate</div>`:'';
   const nav=(attr,icon,text,n,on,cls='')=>`<button class="nav${on?' on':''} ${cls}" ${attr}>${icon}<span class="nt">${esc(text)}</span><span class="nc">${n}</span></button>`;
+  const tr=S.mode==='tracks',sends=S.promo.sends,due=sends.filter(isDue).length;
   let h='<div class="sec">Libreria</div>'
-    +nav('data-filter="all"',ICON.wave,'Tutte le tracce',inA.length,S.filter==='all')
-    +nav('data-filter="stale"',ICON.clock,'Ferme',inA.filter(isStale).length,S.filter==='stale','stale')
+    +nav('data-filter="all"',ICON.wave,'Tutte le tracce',inA.length,tr&&S.filter==='all')
+    +nav('data-filter="stale"',ICON.clock,'Ferme',inA.filter(isStale).length,tr&&S.filter==='stale','stale')
+    +'<div class="sec">Promo</div>'
+    +nav('data-mode="promo" data-pf="all"',ICON.send,'Invii',sends.length,S.mode==='promo'&&S.promoFilter==='all')
+    +nav('data-mode="promo" data-pf="due"',ICON.refresh,'Da ricontattare',due,S.mode==='promo'&&S.promoFilter==='due',due?'stale due':'')
+    +nav('data-mode="contacts"',ICON.book,'Contatti',S.promo.contacts.length,S.mode==='contacts')
     +'<div class="sec">Stati</div>'
-    +S.statuses.map(s=>nav(`data-filter="${s.key}"`,`<span class="dot" style="--c:var(--${s.key})"></span>`,s.label,cnt[s.key]||0,S.filter===s.key)).join('');
+    +S.statuses.map(s=>nav(`data-filter="${s.key}"`,`<span class="dot" style="--c:var(--${s.key})"></span>`,s.label,cnt[s.key]||0,tr&&S.filter===s.key)).join('');
   if(S.aliasN>1){
     const aliases=[...new Set(S.projects.map(p=>p.alias))].sort((a,b)=>a.localeCompare(b,'it'));
     h+='<div class="sec">Alias</div>'+nav('data-alias="__all"',ICON.users,'Tutti gli alias',S.projects.length,S.alias==='__all')
@@ -892,8 +1335,24 @@ function renderSide(){
 }
 
 function renderToolbar(){
+  const al=S.alias!=='__all'?' · '+S.alias:'',tb=$('#tbAction'),q=$('#q');
+  if(S.mode==='promo'){
+    const l=promoSends(),tr=new Set(l.map(s=>s.project)).size;
+    $('#title').textContent=(S.promoFilter==='due'?'Da ricontattare':'Invii')+al;
+    $('#count').textContent=`${l.length} ${l.length===1?'invio':'invii'} · ${tr} ${tr===1?'traccia':'tracce'}`;
+    tb.innerHTML=ICON.send+'Nuovo invio';tb.dataset.action='send';q.placeholder='Cerca tracce, label, persone';
+    document.querySelectorAll('[data-pk]').forEach(b=>b.classList.toggle('on',b.dataset.pk===S.promoKind));
+    return;
+  }
+  if(S.mode==='contacts'){
+    const n=contactList().length;
+    $('#title').textContent='Contatti';$('#count').textContent=n+(n===1?' contatto':' contatti');
+    tb.innerHTML=ICON.plus+'Nuovo contatto';tb.dataset.action='contact';q.placeholder='Cerca contatti e generi';
+    return;
+  }
+  q.placeholder='Cerca tracce e note';
   const t=S.filter==='all'?'Tutte le tracce':S.filter==='stale'?'Tracce ferme':label(S.filter);
-  $('#title').textContent=t+(S.alias!=='__all'?' · '+S.alias:'');
+  $('#title').textContent=t+al;
   const n=filtered().length;
   $('#count').textContent=S.loaded?n+(n===1?' traccia':' tracce'):'';
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('on',b.dataset.view===S.view));
@@ -901,9 +1360,11 @@ function renderToolbar(){
 }
 
 function renderMain(){
-  const m=$('#main');m.className=S.view;
+  const m=$('#main');m.className=S.mode==='promo'?'board':S.mode==='contacts'?'list':S.view;
   if(!S.loaded){m.innerHTML='<div class="empty"><div class="spinner"></div>Carico i progetti…</div>';return}
   if(S.error){m.innerHTML=`<div class="empty"><div class="big">Non riesco a leggere i progetti</div><div class="small">${esc(S.error)}</div><button class="btn" id="retry">Riprova</button></div>`;return}
+  if(S.mode==='promo')return renderPromo();
+  if(S.mode==='contacts')return renderContacts();
   if(!S.projects.length){m.innerHTML=`<div class="empty"><div class="big">Nessun progetto Ableton trovato</div>Cerco le cartelle che contengono un file .als dentro<div class="small">${esc(S.root)}</div></div>`;return}
   const list=sorted(filtered());
   if(!list.length){m.innerHTML=`<div class="empty"><div class="big">Nessuna traccia</div>Niente corrisponde ai filtri o alla ricerca.<button class="btn" id="resetF">Azzera filtri</button></div>`;return}
@@ -926,17 +1387,21 @@ function renderBoard(list){
 function card(p){
   const meta=[];
   if(S.alias==='__all'&&S.aliasN>1)meta.push(`<span class="pill">${esc(p.alias)}</span>`);
+  if(p.kind!=='original')meta.push(`<span class="pill kind">${KINDS[p.kind]}</span>`);
   if(p.bpm)meta.push(`<span class="bpm">${p.bpm} BPM</span>`);
   meta.push(`<span>${ago(p.days)}</span>`);
   if(p.versions>1)meta.push(`<span title="File .als nella cartella">${p.versions} versioni</span>`);
   if(p.status_source==='auto')meta.push('<span class="auto" title="Stato dedotto dal nome della cartella">auto</span>');
-  const rel=releaseText(p);
+  const rel=releaseText(p),ss=sendsOf(p.id),dn=ss.filter(isDue).length;
+  const promo=ss.length?`<div class="meta"><span class="pill sends-b${dn?' has-due':''}">${ICON.send}${ss.length} ${ss.length===1?'invio':'invii'}${dn?` · ${dn} da ricontattare`:''}</span></div>`
+    :p.status==='finita'?'<div class="meta"><span class="pill never">Mai inviata</span></div>':'';
   return `<article class="card${p.id===S.openId?' is-sel':''}" draggable="true" data-id="${esc(p.id)}" style="--c:var(--${p.status})">
     <div class="c-top"><div class="cname">${esc(p.name)}</div><div class="c-act">
       <button class="ib sm" data-act="play" title="Apri in Ableton">${ICON.play}</button>
       <button class="ib sm" data-act="more" title="Altre azioni">${ICON.more}</button></div></div>
     <div class="meta">${meta.join('')}</div>
     ${isStale(p)?`<div class="meta"><span class="pill stale-b">${ICON.clock}Ferma da ${p.days} giorni</span></div>`:''}
+    ${promo}
     ${rel?`<div class="crel">${esc(rel)}</div>`:''}
     ${p.notes?`<div class="cnote">${esc(p.notes)}</div>`:''}</article>`;
 }
@@ -958,50 +1423,141 @@ function renderList(list){
 
 // ------------------------------------------------------------ pannello dettagli
 function renderPanel(){
-  const el=$('#panel'),p=byId(S.openId);if(!p)return closePanel();
-  const a=document.activeElement;
+  const el=$('#panel'),a=document.activeElement;
   const keep=a&&el.contains(a)&&a.id?{id:a.id,v:a.value,s:a.selectionStart,e:a.selectionEnd}:null;
+  if(S.openContact){const c=contactById(S.openContact);if(!c)return closePanel();renderContactPanel(el,c)}
+  else{const p=byId(S.openId);if(!p)return closePanel();renderTrackPanel(el,p)}
+  if(keep){const n=document.getElementById(keep.id);if(n){n.value=keep.v;n.focus();try{n.setSelectionRange(keep.s,keep.e)}catch(e){}}}
+}
+
+function renderTrackPanel(el,p){
   const ta=$('#notes'),notes=ta&&ta.dataset.pid===p.id?ta.value:p.notes;
+  const ss=sendsOf(p.id),sendsTab=S.ptab==='sends';
   const facts=[['BPM',p.bpm||'–'],['Modificata',ago(p.days)],['Versioni .als',p.versions]];
-  el.innerHTML=`<div class="p-scroll">
-    <div class="p-head"><div><div class="p-alias">${esc(p.alias)}</div><h2>${esc(p.name)}</h2></div>
+  const head=`<div class="p-head"><div><div class="p-alias">${esc(p.alias)}</div><h2>${esc(p.name)}</h2></div>
       <button class="ib" data-close title="Chiudi (Esc)">${ICON.close}</button></div>
     <button class="p-path" data-act="finder" title="Mostra nel Finder">${ICON.folder}<span>${esc(p.path)}</span></button>
     <div class="facts">${facts.map(([k,v])=>`<div class="fact">${k}<b>${esc(v)}</b></div>`).join('')}</div>
     ${isStale(p)?`<div class="warn">${ICON.clock}Non la tocchi da ${p.days} giorni</div>`:''}
+    <div class="ptabs"><button data-ptab="details" class="${sendsTab?'':'on'}">Dettagli</button>
+      <button data-ptab="sends" class="${sendsTab?'on':''}">Invii<span class="n">${ss.length}</span></button></div>`;
+  if(sendsTab){
+    el.innerHTML=`<div class="p-scroll">${head}${trackSendsHtml(p,ss)}</div>
+    <div class="p-foot"><button class="btn primary" data-new-send="${esc(p.id)}">${ICON.send}Nuovo invio</button>
+      <button class="btn" data-new-promo="${esc(p.id)}">${ICON.wave}Promo ai DJ</button>
+      <div class="p-keys">↑↓ tracce<br>Esc chiudi</div></div>`;
+    return;
+  }
+  el.innerHTML=`<div class="p-scroll">${head}
     <div class="lbl">Stato<span class="hint">tasti 1–${S.statuses.length}</span></div>
     <div class="stgrid">${S.statuses.map((s,i)=>`<button class="stb${p.status===s.key?' on':''}" data-st="${s.key}" style="--c:var(--${s.key})"><span class="dot"></span>${esc(s.label)}<span class="k">${i+1}</span></button>`).join('')}</div>
     ${p.status_source==='auto'?'<div class="autonote">Stato dedotto dal nome della cartella: scegline uno per confermarlo.</div>':''}
+    <div class="lbl">Tipo di traccia${p.kind_source==='auto'?'<span class="hint">dedotto dal nome</span>':''}</div>
+    <div class="seg2">${Object.entries(KINDS).map(([k,l])=>`<button data-kind="${k}" class="${p.kind===k?'on':''}">${l}</button>`).join('')}</div>
+    <div class="lbl">Uscita</div>
+    <div class="seg2">${[['','Non ancora'],['label','Con una label'],['self','Pubblicata da me']].map(([k,l])=>`<button data-rk="${k}" class="${p.release_kind===k?'on':''}">${l}</button>`).join('')}</div>
+    ${p.release_kind==='label'?`<div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="Nome della label"></div>
+      <div><div class="lbl">Data di uscita</div><input class="field" id="rdate" type="${p.release_date?'date':'text'}" placeholder="Nessuna data" value="${esc(p.release_date)}"></div></div>`
+    :p.release_kind==='self'?`<div class="row2"><div><div class="lbl">Dove</div><select class="field" id="rplat">${Object.entries(PLAT).map(([k,l])=>`<option value="${k}"${p.release_platform===k?' selected':''}>${k==='altro'?'Altro':l}</option>`).join('')}</select></div>
+      <div><div class="lbl">Pubblicata il</div><input class="field" id="rdate" type="${p.release_date?'date':'text'}" placeholder="Nessuna data" value="${esc(p.release_date)}"></div></div>
+      <div class="lbl">Link alla traccia pubblicata</div>
+      <div class="relrow"><input class="field" id="rlink" value="${esc(p.release_link)}" placeholder="https://soundcloud.com/…"><button class="btn" data-open-rlink title="Apri il link">${ICON.globe}Apri</button></div>
+      ${p.status!=='rilasciata'?`<button class="btn primary" data-publish style="margin-top:10px">${ICON.send}Segna come pubblicata${p.release_date?'':' oggi'}</button>`:''}`
+    :`<div class="autonote">${p.kind==='edit'?'Gli edit di solito si pubblicano da sé (per esempio su SoundCloud) o si mandano come promo ai DJ.':'Quando esce, scegli se con una label o pubblicata da te.'}</div>`}
     <div class="lbl">Note e cose da fare<span class="saved" id="saved">Salvato ✓</span></div>
     <textarea id="notes" data-pid="${esc(p.id)}" placeholder="Rifare il drop, kick troppo forte, mandare a…">${esc(notes)}</textarea>
-    <div class="row2"><div><div class="lbl">Label</div><input class="field" id="label" value="${esc(p.label)}" placeholder="Nome della label"></div>
-      <div><div class="lbl">Data di uscita</div><input class="field" id="rdate" type="${p.release_date?'date':'text'}" placeholder="Nessuna data" value="${esc(p.release_date)}"></div></div>
   </div>
   <div class="p-foot"><button class="btn primary" data-act="play">${ICON.play}Apri in Ableton</button>
     <button class="btn" data-act="finder">${ICON.folder}Finder</button>
     <div class="p-keys">${CMD}↵ apri · ↑↓ tracce<br>Esc chiudi</div></div>`;
-  if(keep){const n=document.getElementById(keep.id);if(n){n.value=keep.v;n.focus();try{n.setSelectionRange(keep.s,keep.e)}catch(e){}}}
   $('#notes').addEventListener('input',e=>{S.pendingNotes={id:p.id,v:e.target.value};clearTimeout(S.notesT);S.notesT=setTimeout(flushNotes,700)});
-  $('#label').addEventListener('change',e=>update(p.id,{label:e.target.value}));
+  const lb=$('#label');if(lb)lb.addEventListener('change',e=>update(p.id,{label:e.target.value}));
+  const rp=$('#rplat');if(rp)rp.addEventListener('change',e=>update(p.id,{release_platform:e.target.value}));
+  const rl=$('#rlink');if(rl)rl.addEventListener('change',e=>update(p.id,{release_link:e.target.value.trim()}));
   // data vuota: campo di testo "Nessuna data" (WebKit mostrerebbe la data di oggi come se fosse impostata)
-  const rd=$('#rdate');
+  const rd=$('#rdate');if(!rd)return;
   rd.addEventListener('focus',()=>{if(rd.type!=='date'){rd.type='date';try{rd.showPicker()}catch(e){}}});
   rd.addEventListener('blur',()=>{if(!rd.value)rd.type='text'});
   rd.addEventListener('change',e=>update(p.id,{release_date:e.target.value}));
 }
+
+function trackSendsHtml(p,ss){
+  const ex=exclusivesFor(p.id).map(s=>`<div class="note-box">${ICON.info}<div>In esclusiva a <b>${esc((contactById(s.contact)||{}).name||'?')}</b>
+    fino ${alDate(s.exclusive_until)}: se la mandi ad altri prima di quella data te lo ricordo.</div></div>`).join('');
+  if(!ss.length)return ex+`<div class="empty" style="min-height:200px"><div class="big">Non l'hai ancora mandata a nessuno</div>
+    Quando la mandi a una label, a un A&amp;R o a un DJ, registralo qui: tieni lo storico e ti ricordo i follow-up.</div>`;
+  return ex+'<div class="sends">'+ss.map(s=>sendRow(s,'contact')).join('')+'</div>';
+}
+
+// una riga dello storico: nel pannello di una traccia mostra il contatto, in quello di un contatto la traccia
+function sendRow(s,show){
+  const c=contactById(s.contact)||{name:'Contatto eliminato',type:'altro'},ch=CH[s.channel]||CH.altro,p=byId(s.project);
+  const addr=chAddr(c,s.channel),col=sendColor(s);
+  const meta=[`${s.kind==='promo'?'<span class="pill promo-p">Promo</span>':''}<span class="chan">${ICON[ch.i]}${esc(ch.l)}${show==='contact'&&addr?' · '+esc(addr):''}</span>`,
+    `<span>${shortDate(s.date)}${s.reply_date?' → risposta '+shortDate(s.reply_date):''}</span>`];
+  if(isDue(s))meta.push(`<span class="due">${esc(dueText(s).toLowerCase())}</span>`);
+  else if(s.status==='attesa'&&s.followup)meta.push(`<span>follow-up ${inDays(s.followup)}</span>`);
+  if(s.followups&&s.followups.length)meta.push(`<span>${s.followups.length===1?'1 follow-up fatto':s.followups.length+' follow-up fatti'}</span>`);
+  const note=[s.reply_note?'«'+s.reply_note+'»':'',s.notes].filter(Boolean).join('\n');
+  const act=s.status==='attesa'?`<div class="send-act"><button class="btn sm" data-sact="followup" data-sid="${s.id}">${ICON.refresh}Ricontatta</button>
+    <button class="btn sm" data-sact="edit" data-sid="${s.id}">Segna risposta</button></div>`:'';
+  return `<div class="send" data-sedit="${s.id}" style="--c:${col}" title="Modifica l'invio">
+    <div class="send-top"><b>${esc(show==='contact'?c.name:(p?p.name:s.title))}</b><span class="st" style="--c:${col}">${esc(sendLabel(s))}</span></div>
+    <div class="send-meta">${meta.join('')}</div>${note?`<div class="send-note">${esc(note)}</div>`:''}${act}</div>`;
+}
+
+function renderContactPanel(el,c){
+  const ss=S.promo.sends.filter(s=>s.contact===c.id),ans=ss.filter(s=>ANSWERED.includes(s.status));
+  const times=ans.filter(s=>s.reply_date).map(s=>dayDiff(s.date,s.reply_date)).filter(n=>n>=0);
+  const facts=[['Invii',ss.length],['Risposte',ss.length?Math.round(ans.length/ss.length*100)+'%':'–'],
+    ['Tempo medio',times.length?Math.round(times.reduce((a,b)=>a+b,0)/times.length)+' giorni':'–']];
+  const f=(k,l,ph)=>`<label>${l}<input class="field" id="cf-${k}" data-cf="${k}" value="${esc(k==='genres'?(c.genres||[]).join(', '):c[k])}" placeholder="${esc(ph)}"></label>`;
+  el.innerHTML=`<div class="p-scroll">
+    <div class="p-head"><div><div class="p-alias">${esc(contactSub(c)||'Contatto')}</div><h2>${esc(c.name)}</h2></div>
+      <button class="ib" data-close title="Chiudi (Esc)">${ICON.close}</button></div>
+    <div class="facts">${facts.map(([k,v])=>`<div class="fact">${k}<b>${esc(v)}</b></div>`).join('')}</div>
+    <div class="lbl">Dati<span class="saved" id="saved">Salvato ✓</span></div>
+    <div class="cf">${f('name','Nome','')}
+      <label>Tipo<select class="field" id="cf-type" data-cf="type">${Object.entries(CTYPES).map(([k,l])=>`<option value="${k}"${c.type===k?' selected':''}>${l}</option>`).join('')}</select></label>
+      ${f('org','Label o agenzia','per un A&R o un promoter')}${f('genres','Generi','Deep House, Melodic')}
+      ${f('email','Email','demo@label.com')}${f('instagram','Instagram','nomeutente')}
+      ${f('soundcloud','SoundCloud','https://soundcloud.com/…')}${f('website','Pagina per le demo','https://…')}</div>
+    <div class="lbl">Note</div>
+    <textarea id="cf-notes" data-cf="notes" class="short" placeholder="Vogliono solo link privati, rispondono in 3 settimane…">${esc(c.notes)}</textarea>
+    <div class="lbl">Storico</div>
+    ${ss.length?'<div class="sends">'+ss.map(s=>sendRow(s,'track')).join('')+'</div>':'<div class="autonote">Ancora nessun invio a questo contatto.</div>'}
+  </div>
+  <div class="p-foot"><button class="btn primary" data-new-send-c="${c.id}">${ICON.send}Nuovo invio</button>
+    <span class="grow" style="flex:1"></span>
+    <button class="btn danger" data-del-contact="${c.id}" ${ss.length?'disabled title="Ha invii registrati: lo tengo per non perdere lo storico"':''}>Elimina contatto</button></div>`;
+  el.querySelectorAll('[data-cf]').forEach(i=>i.addEventListener('change',()=>saveContactField(c.id,i.dataset.cf,i.value)));
+}
+async function saveContactField(id,k,v){
+  try{
+    const d=await api('/api/contact',{id,[k]:v});
+    const i=S.promo.contacts.findIndex(c=>c.id===id);if(i>=0)S.promo.contacts[i]=d.contact;
+    renderSide();renderToolbar();renderMain();
+    if(['name','type','org'].includes(k))renderPanel();
+    else{const s=$('#saved');if(s){s.classList.add('show');setTimeout(()=>s.classList.remove('show'),1300)}}
+  }catch(e){toast('Errore: '+e.message);renderPanel()}
+}
 function flushNotes(){clearTimeout(S.notesT);const n=S.pendingNotes;S.pendingNotes=null;if(n)update(n.id,{notes:n.v})}
-function openPanel(id){
-  if(S.openId!==id)flushNotes();
-  S.openId=id;renderPanel();
+function openPanel(id,tab){
+  if(S.openId!==id){flushNotes();S.ptab=tab||'details'}else if(tab)S.ptab=tab;
+  S.openContact=null;S.openId=id;renderPanel();
+  $('#panel').classList.add('open');document.body.classList.add('panel-open');markSel(true);
+}
+function openContact(cid){
+  flushNotes();S.openId=null;S.openContact=cid;renderPanel();
   $('#panel').classList.add('open');document.body.classList.add('panel-open');markSel(true);
 }
 function closePanel(){
-  flushNotes();S.openId=null;
+  flushNotes();S.openId=null;S.openContact=null;
   $('#panel').classList.remove('open');document.body.classList.remove('panel-open');markSel();
 }
 function markSel(scroll){
-  document.querySelectorAll('#main [data-id]').forEach(e=>{
-    const on=e.dataset.id===S.openId;e.classList.toggle('is-sel',on);
+  document.querySelectorAll('#main [data-id],#main [data-cid]').forEach(e=>{
+    const on=e.dataset.id?e.dataset.id===S.openId:e.dataset.cid===S.openContact;e.classList.toggle('is-sel',on);
     if(on&&scroll)setTimeout(()=>e.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'}),60);
   });
 }
@@ -1009,7 +1565,7 @@ function move(delta){
   const l=visibleOrder();if(!l.length)return;
   let i=l.findIndex(p=>p.id===S.openId);
   i=i<0?0:Math.max(0,Math.min(l.length-1,i+delta));
-  openPanel(l[i].id);
+  openPanel(l[i].id,S.ptab);
 }
 
 // ------------------------------------------------------------ azioni
@@ -1046,7 +1602,8 @@ function closeSide(){document.body.classList.remove('side-open')}
 function openMenu(id,x,y){
   const p=byId(id);if(!p)return;S.menuId=id;const m=$('#menu');
   m.innerHTML=`<button data-m="open">${ICON.play}Apri in Ableton</button><button data-m="finder">${ICON.folder}Mostra nel Finder</button>
-    <button data-m="details">${ICON.info}Dettagli e note</button><div class="sep"></div><div class="mh">Sposta in</div>`
+    <button data-m="details">${ICON.info}Dettagli e note</button><button data-m="send">${ICON.send}Nuovo invio</button><button data-m="promo">${ICON.wave}Promo ai DJ</button>
+    <div class="sep"></div><div class="mh">Sposta in</div>`
     +S.statuses.map(s=>`<button data-m="st" data-st="${s.key}" style="--c:var(--${s.key})"><span class="dot"></span>${esc(s.label)}${p.status===s.key?'<span class="chk">✓</span>':''}</button>`).join('')
     +(p.status_source==='manual'?`<div class="sep"></div><button data-m="st" data-st="">${ICON.wand}Stato automatico dal nome</button>`:'');
   m.style.left='0px';m.style.top='0px';m.style.display='block';
@@ -1059,6 +1616,8 @@ function menuAction(b){
   const id=S.menuId,a=b.dataset.m;closeMenu();
   if(a==='open')openIn(id,'ableton');else if(a==='finder')openIn(id,'finder');
   else if(a==='details')openPanel(id);else if(a==='st')setStatus(id,b.dataset.st);
+  else if(a==='send')openCompose({pid:id,fixedTrack:true});
+  else if(a==='promo')openCompose({pid:id,fixedTrack:true,kind:'promo'});
 }
 
 function openSettings(){
@@ -1069,6 +1628,12 @@ function openSettings(){
     <div class="lbl">Tag del Finder</div>
     <label class="check"><input type="checkbox" id="stags" ${s.finder_tags?'checked':''} ${MAC?'':'disabled'}>Quando cambio stato, metti il tag colorato alla cartella del progetto</label>
     <button class="btn" id="syncTags" style="margin-top:12px" ${MAC?'':'disabled'}>Applica i tag a tutte le tracce</button>
+    <div class="lbl">Promo</div>
+    <div class="inline">Ricontatta dopo <input class="field" type="number" min="1" id="pdays" value="${S.promo.settings.followup_days}" style="width:80px"> giorni senza risposta</div>
+    <div class="lbl">Modelli dei messaggi<span class="hint">{nome} {artista} {titolo} {bpm} {link}</span></div>
+    ${[['email_subject','Oggetto della mail',0],['email_body','Mail per label e pagine demo',1],['dm_body','Messaggio breve (DM, SoundCloud)',1],['followup_body','Follow-up',1],['promo_subject','Oggetto della promo ai DJ',0],['promo_body','Promo ai DJ ({uscita} = «, esce il…»)',1]]
+      .map(([k,l,big])=>`<label class="tpl">${l}${big?`<textarea class="msg short" data-tpl="${k}">${esc(S.promo.settings.templates[k]||'')}</textarea>`
+        :`<input class="field" data-tpl="${k}" value="${esc(S.promo.settings.templates[k]||'')}">`}</label>`).join('')}
     <div class="lbl">Scorciatoie</div>
     <div class="keys"><span><kbd>${CMD}F</kbd> <kbd>/</kbd></span>Cerca<span><kbd>↑</kbd> <kbd>↓</kbd></span>Scorri le tracce e apri i dettagli
       <span><kbd>1</kbd>–<kbd>${S.statuses.length}</kbd></span>Cambia stato alla traccia aperta<span><kbd>${CMD}↵</kbd></span>Apri in Ableton
@@ -1076,10 +1641,381 @@ function openSettings(){
     <div class="m-foot"><button class="btn primary" id="closeS">Fatto</button></div>`;
   $('#sdays').addEventListener('change',async e=>{try{const d=await api('/api/settings',{stale_days:+e.target.value||60});S.settings=d.settings;render()}catch(err){toast(err.message)}});
   $('#stags').addEventListener('change',async e=>{try{const d=await api('/api/settings',{finder_tags:e.target.checked});S.settings=d.settings}catch(err){toast(err.message)}});
+  $('#pdays').addEventListener('change',async e=>{try{const d=await api('/api/promo_settings',{followup_days:+e.target.value||14});S.promo.settings=d.settings}catch(err){toast(err.message)}});
+  document.querySelectorAll('[data-tpl]').forEach(i=>i.addEventListener('change',async()=>{
+    try{const d=await api('/api/promo_settings',{templates:{[i.dataset.tpl]:i.value}});S.promo.settings=d.settings;i.value=d.settings.templates[i.dataset.tpl];toast('Modello salvato')}
+    catch(err){toast(err.message)}}));
   $('#syncTags').addEventListener('click',async()=>{try{const d=await api('/api/sync_tags',{});toast(`Tag applicati a ${d.ok} tracce`+(d.errors.length?` (${d.errors.length} errori)`:''))}catch(e){toast('Errore: '+e.message)}});
   $('#ovs').classList.add('show');
 }
 function closeSettings(){$('#ovs').classList.remove('show')}
+
+// ------------------------------------------------------------ promo: board degli invii e rubrica
+function promoSends(){
+  const q=S.q.trim().toLowerCase();
+  return S.promo.sends.filter(s=>{
+    if(S.promoFilter==='due'&&!isDue(s))return false;
+    if(S.promoKind!=='all'&&(s.kind||'demo')!==S.promoKind)return false;
+    const p=byId(s.project),c=contactById(s.contact)||{};
+    if(S.alias!=='__all'&&p&&p.alias!==S.alias)return false;
+    return !q||[s.title,p&&p.name,c.name,c.org,s.notes,s.reply_note].join(' ').toLowerCase().includes(q);
+  });
+}
+function renderPromo(){
+  const m=$('#main');
+  if(!S.promo.sends.length){m.innerHTML=`<div class="empty"><div class="big">Nessun invio registrato</div>
+    <div class="small" style="max-width:460px">Quando mandi una traccia a una label, a un A&amp;R o a un DJ, registralo qui:
+    tieni lo storico, vedi chi deve ancora rispondere e ti ricordo quando ricontattare.</div>
+    <button class="btn primary" data-new-send="">${ICON.send}Nuovo invio</button></div>`;return}
+  const list=promoSends();
+  if(!list.length){m.innerHTML=`<div class="empty"><div class="big">${S.promoFilter==='due'?'Niente da ricontattare':'Nessun invio'}</div>
+    ${S.promoFilter==='due'?'Tutti i follow-up sono in regola.':'Niente corrisponde alla ricerca.'}</div>`;return}
+  const cols=S.promoFilter==='due'?PCOLS.slice(0,1):PCOLS;
+  m.innerHTML='<div class="board-w">'+cols.map(([k,l,c])=>{
+    const items=list.filter(s=>sendCol(s)===k);
+    return `<section class="col" style="--c:${c}"><div class="colh"><span class="dot"></span><span class="ct">${l}</span><span class="n">${items.length}</span></div>
+      <div class="cards">${items.length?items.map(sendCard).join(''):'<div class="col-empty">Nessun invio</div>'}</div></section>`;
+  }).join('')+'</div>';
+}
+function sendCard(s){
+  const c=contactById(s.contact)||{name:'Contatto eliminato',type:'altro'},p=byId(s.project),ch=CH[s.channel]||CH.altro;
+  const when=s.status==='attesa'?'inviata '+agoDate(s.date):s.reply_date?'risposta '+agoDate(s.reply_date):agoDate(s.date);
+  const sub=c.type!=='label'?contactSub(c):'';
+  const ex=s.exclusive_until&&s.exclusive_until>=S.promo.today&&(s.status==='attesa'||s.status==='interessati');
+  const rel=s.status==='firmata'&&p?releaseText(p):'';
+  return `<article class="card scard" data-send="${s.id}" style="--c:${sendColor(s)}">
+    <div class="c-top"><div class="cname">${esc(p?p.name:s.title)}</div><div class="c-act">
+      <button class="ib sm" data-sact="edit" data-sid="${s.id}" title="Modifica o segna la risposta">${ICON.edit}</button></div></div>
+    <div class="who">${avatar(c)}<b>${esc(c.name)}</b>${sub?`<small>· ${esc(sub)}</small>`:''}</div>
+    <div class="meta">${s.kind==='promo'?'<span class="pill promo-p">Promo</span>':''}<span class="chan">${ICON[ch.i]}${esc(ch.l)}</span><span>${esc(when)}</span>
+      ${s.followups&&s.followups.length?`<span>${s.followups.length} follow-up</span>`:''}</div>
+    ${isDue(s)?`<div class="meta"><span class="pill stale-b">${ICON.clock}${esc(dueText(s))}</span></div>`
+      :s.status==='attesa'&&s.followup?`<div class="meta"><span>follow-up ${inDays(s.followup)}</span></div>`:''}
+    ${s.status==='rifiutata'||s.status==='nessuna'?`<div class="meta"><span class="st" style="--c:${sendColor(s)}">${esc(sendLabel(s))}</span></div>`:''}
+    ${ex?`<div class="crel excl">In esclusiva fino ${alDate(s.exclusive_until)}</div>`:''}
+    ${rel?`<div class="crel">${esc(rel)}</div>`:''}
+    ${s.reply_note?`<div class="cnote">«${esc(s.reply_note)}»</div>`:''}</article>`;
+}
+
+function contactList(){
+  const q=S.q.trim().toLowerCase();
+  return S.promo.contacts.filter(c=>!q||[c.name,c.org,c.email,c.instagram,(c.genres||[]).join(' '),c.notes,CTYPES[c.type]]
+    .join(' ').toLowerCase().includes(q));
+}
+function renderContacts(){
+  const m=$('#main');
+  if(!S.promo.contacts.length){m.innerHTML=`<div class="empty"><div class="big">La rubrica è vuota</div>
+    <div class="small" style="max-width:460px">Aggiungi le label, gli A&amp;R e i DJ a cui mandi la tua musica:
+    ritrovi canali, note e lo storico di tutto quello che gli hai mandato.</div>
+    <button class="btn primary" data-new-contact>${ICON.plus}Nuovo contatto</button></div>`;return}
+  const list=contactList();
+  if(!list.length){m.innerHTML='<div class="empty"><div class="big">Nessun contatto</div>Niente corrisponde alla ricerca.</div>';return}
+  m.innerHTML=`<table class="tbl"><thead><tr><th>Nome</th><th>Tipo</th><th>Canali</th><th>Generi</th><th class="num">Invii</th>
+    <th class="num">Risposte</th><th>Ultimo invio</th></tr></thead><tbody>`+list.map(c=>{
+    const ss=S.promo.sends.filter(s=>s.contact===c.id),ans=ss.filter(s=>ANSWERED.includes(s.status)).length;
+    const last=ss.reduce((a,s)=>s.date>a?s.date:a,'');
+    const icons=[c.email&&ICON.mail,c.instagram&&ICON.ig,c.soundcloud&&ICON.cloud,c.website&&ICON.globe].filter(Boolean).join('');
+    return `<tr class="row${c.id===S.openContact?' is-sel':''}" data-cid="${c.id}">
+      <td><div class="who" style="margin:0">${avatar(c)}<b>${esc(c.name)}</b></div></td><td class="mute">${esc(contactSub(c))}</td>
+      <td><span class="icons">${icons}</span></td><td>${(c.genres||[]).map(g=>`<span class="genre">${esc(g)}</span>`).join('')}</td>
+      <td class="num">${ss.length}</td><td class="num rate">${ss.length?`${ans} <small>· ${Math.round(ans/ss.length*100)}%</small>`:'–'}</td>
+      <td class="nowrap">${last?agoDate(last):'–'}</td></tr>`;
+  }).join('')+'</tbody></table>';
+}
+
+// ------------------------------------------------------------ promo: nuovo invio, ricontatta, modifica
+const CH_ORDER=['email','instagram','soundcloud','website','altro'];
+const ADDR={email:['Email','demo@label.com'],instagram:['Utente Instagram','nomeutente'],
+  soundcloud:['Profilo SoundCloud','https://soundcloud.com/…'],website:['Pagina per le demo','https://…']};
+const OPEN_LABEL={email:'Apri in Mail',instagram:'Copia, apri Instagram',soundcloud:'Copia, apri SoundCloud',website:'Copia, apri il sito',altro:'Copia il messaggio'};
+const defaultChannel=c=>!c?'email':c.email?'email':c.instagram?'instagram':c.website?'website':c.soundcloud?'soundcloud':'email';
+
+function openCompose(o){
+  const T=S.promo.today,N=S.promo.settings.followup_days||14;
+  const C=S.compose={mode:o.mode||'new',sid:o.sid||null,dirty:false,fixedTrack:!!o.fixedTrack,addrFor:null,recips:new Set(),step:''};
+  if(C.sid){
+    const s=S.promo.sends.find(x=>x.id===C.sid);if(!s)return;
+    Object.assign(C,{kind:s.kind||'demo',pid:s.project,cid:s.contact,channel:s.channel,link:s.link,date:s.date,followup:s.followup,
+      excl:s.exclusive_until,status:s.status,reply_date:s.reply_date,reply_note:s.reply_note,notes:s.notes,title:s.title,fixedTrack:true});
+    if(C.mode==='followup')C.followup=addDays(T,N);
+  }else{
+    const p=byId(o.pid),oc=contactById(o.cid);
+    // link: quello salvato per la traccia, altrimenti quello dell'ultimo invio
+    const lastLink=o.pid?(sendsOf(o.pid).find(s=>s.link)||{}).link||'':'';
+    // promo ai DJ se lo chiedi, se scegli un DJ o un promoter, o se la traccia è un edit
+    const kind=o.kind||(oc?(oc.type==='dj'||oc.type==='promoter'?'promo':'demo'):(p&&p.kind==='edit'?'promo':'demo'));
+    Object.assign(C,{kind,pid:o.pid||'',cid:o.cid||(S.promo.contacts.length?'':'__new'),link:(p&&p.link)||lastLink,date:T,
+      followup:kind==='promo'?'':addDays(T,N),excl:'',status:'attesa',ncName:'',ncType:'label'});
+    if(o.cid)C.recips.add(o.cid);
+    C.channel=defaultChannel(oc);
+  }
+  renderCompose();$('#ovSend').classList.add('show');
+}
+function syncCompose(){
+  const C=S.compose;if(!C)return;
+  const map={cLink:'link',cAddr:'addr',cDate:'date',cFollow:'followup',cExcl:'excl',cSubj:'subj',cMsg:'msg',cStatus:'status',
+    cReplyDate:'reply_date',cReply:'reply_note',cNotes:'notes',ncName:'ncName',ncType:'ncType'};
+  for(const [id,k] of Object.entries(map)){const e=document.getElementById(id);if(e)C[k]=e.value}
+}
+function composeCtx(nome){
+  const C=S.compose,p=byId(C.pid);
+  return {nome:nome||'',artista:p&&p.alias!=='Senza alias'?p.alias:'',titolo:p?p.name:(C.title||''),bpm:p&&p.bpm?p.bpm:'',
+    link:C.link||'',label:p?p.label:'',uscita:p&&p.release_date?', esce '+ilDate(p.release_date):''};
+}
+// senza nome (promo a più DJ) "Ciao !" diventa "Ciao!"
+const tidy=t=>t.replace(/[ \t]+([!,.?])/g,'$1').replace(/[ \t]{2,}/g,' ').replace(/\n{3,}/g,'\n\n');
+function composeText(nomeOverride){
+  const C=S.compose,T=S.promo.settings.templates,promo=C.kind==='promo';
+  let nome;
+  if(nomeOverride!==undefined)nome=nomeOverride;
+  else if(promo&&C.mode==='new'){const r=[...C.recips];nome=r.length===1?(contactById(r[0])||{}).name:''}
+  else nome=(C.cid==='__new'?{name:C.ncName}:contactById(C.cid)||{}).name;
+  const ctx=composeCtx(nome),subj=fill(promo?T.promo_subject:T.email_subject,ctx);
+  const key=C.mode==='followup'?'followup_body':promo?'promo_body':(C.channel==='email'||C.channel==='website')?'email_body':'dm_body';
+  return {subj:C.mode==='followup'?'Re: '+subj:subj,msg:tidy(fill(T[key],ctx))};
+}
+function regenMsg(){
+  const C=S.compose;if(!C||C.dirty||C.mode==='edit')return;
+  syncCompose();const t=composeText();C.subj=t.subj;C.msg=t.msg;
+  const m=$('#cMsg'),sj=$('#cSubj');if(m)m.value=C.msg;if(sj)sj.value=C.subj;
+}
+function dateField(id,v,ph){return `<input class="field" id="${id}" data-date type="${v?'date':'text'}" placeholder="${ph}" value="${esc(v||'')}">`}
+function bindDates(root){
+  // data vuota: campo di testo (WebKit mostrerebbe la data di oggi come se fosse impostata)
+  root.querySelectorAll('[data-date]').forEach(i=>{
+    i.addEventListener('focus',()=>{if(i.type!=='date'){i.type='date';try{i.showPicker()}catch(e){}}});
+    i.addEventListener('blur',()=>{if(!i.value)i.type='text'});
+  });
+}
+function trackOptions(sel){
+  const rank=p=>p.status==='finita'?0:p.status==='master'?1:p.status==='rilasciata'?3:2;
+  return [...S.projects].sort((a,b)=>rank(a)-rank(b)||b.mtime-a.mtime).map(p=>`<option value="${esc(p.id)}"${p.id===sel?' selected':''}>
+    ${esc(p.name)} · ${esc(label(p.status))}${p.kind!=='original'?' · '+esc(KINDS[p.kind]):''}${S.aliasN>1?' · '+esc(p.alias):''}</option>`).join('');
+}
+function composeWarnings(){
+  const C=S.compose;if(C.mode!=='new'||!C.pid||C.kind==='promo')return'';
+  const p=byId(C.pid),c=C.cid&&C.cid!=='__new'?contactById(C.cid):null;
+  const w=[],same=c?sendsOf(C.pid).filter(s=>s.contact===c.id):[];
+  if(same.length)w.push(`L'hai già mandata a <b>${esc(c.name)}</b> ${ilDate(same[0].date)} (${esc(sendLabel(same[0]).toLowerCase())}).`);
+  exclusivesFor(C.pid,C.cid).forEach(s=>w.push(`È in esclusiva a <b>${esc((contactById(s.contact)||{}).name||'?')}</b> fino ${alDate(s.exclusive_until)}.`));
+  if(p&&p.kind==='edit'&&(!c||c.type==='label'||c.type==='ar'))
+    w.push("È un <b>edit</b>: le label di solito non lo firmano senza la licenza dell'originale. Puoi pubblicarlo da te o mandarlo come promo ai DJ.");
+  return w.length?`<div class="warnbox">${ICON.warn}<div>${w.join('<br>')}</div></div>`:'';
+}
+// promo ai DJ: con che canale raggiungo ogni contatto
+const viaOf=c=>c.email?'email':c.instagram?'instagram':c.soundcloud?'soundcloud':'';
+function recipRows(){
+  const C=S.compose,order=c=>c.type==='dj'?0:c.type==='promoter'?1:2;
+  return [...S.promo.contacts].sort((a,b)=>order(a)-order(b)||a.name.localeCompare(b.name,'it')).map(c=>{
+    const v=viaOf(c),sent=C.pid&&sendsOf(C.pid).some(s=>s.contact===c.id);
+    return `<label class="rrow"><input type="checkbox" data-rc="${c.id}"${C.recips.has(c.id)?' checked':''}>${avatar(c)}
+      <span class="rname2"><b>${esc(c.name)}</b><small>${esc(contactSub(c))}${sent?' · già inviata':''}</small></span>
+      <span class="via${v?'':' due'}">${v?ICON[CH[v].i]+esc(CH[v].l):'nessun canale'}</span></label>`;
+  }).join('');
+}
+function renderDmStep(){
+  const C=S.compose;
+  $('#sendModal').innerHTML=`<h2>Ora su Instagram e SoundCloud</h2>
+    <div class="small">Questi contatti non hanno l'email: per ognuno copio il messaggio e apro la chat, tu incolli e invii.</div>
+    <div class="rlist" style="margin-top:14px">${C.dmList.map(id=>{
+      const c=contactById(id)||{name:'?'},v=c.instagram?'instagram':'soundcloud',done=C.dmDone.has(id);
+      return `<div class="rrow">${avatar(c)}<span class="rname2"><b>${esc(c.name)}</b><small>${esc(CH[v].l)}</small></span>
+        <button class="btn sm${done?'':' primary'}" data-dm="${id}">${done?'✓ Aperta':ICON[CH[v].i]+'Copia e apri'}</button></div>`;
+    }).join('')}</div>
+    <div class="m-foot2"><span class="grow"></span><button class="btn primary" data-closecompose>Fatto</button></div>`;
+}
+function renderCompose(){
+  const C=S.compose;
+  if(C.step==='dm')return renderDmStep();
+  const prevScroll=($('#sendModal .rlist')||{}).scrollTop||0;
+  const p=byId(C.pid),c=C.cid&&C.cid!=='__new'?contactById(C.cid):null,edit=C.mode==='edit',fu=C.mode==='followup';
+  const promoNew=C.kind==='promo'&&C.mode==='new';
+  const key=(C.cid||'')+'|'+C.channel;
+  if(C.addrFor!==key){C.addr=chAddr(c,C.channel);C.addrFor=key}
+  if(!C.dirty&&!edit){const t=composeText();C.subj=t.subj;C.msg=t.msg}
+  const title=edit?(C.kind==='promo'?'Promo':'Invio'):fu?'Ricontatta':'Nuovo invio';
+  const sub=p?`${esc(p.name)} · ${esc(p.alias)}${p.bpm?' · '+p.bpm+' BPM':''}${p.kind!=='original'?' · '+esc(KINDS[p.kind]):''}`:esc(C.title||'');
+  const types=sel=>Object.entries(CTYPES).map(([k,l])=>`<option value="${k}"${sel===k?' selected':''}>${l}</option>`).join('');
+  const head=`<h2>${title}${p||C.title?' · '+esc(p?p.name:C.title):''}</h2><div class="small">${sub}</div>
+    ${C.mode==='new'?`<div class="seg2" style="margin-top:14px"><button data-ck="demo" class="${C.kind==='demo'?'on':''}">${ICON.send}Demo a una label</button>
+      <button data-ck="promo" class="${C.kind==='promo'?'on':''}">${ICON.wave}Promo ai DJ</button></div>`:''}
+    ${C.mode==='new'&&!C.fixedTrack?`<div class="lbl">Traccia</div><select class="field" id="cTrack"><option value=""${C.pid?'':' selected'} disabled>Scegli la traccia…</option>${trackOptions(C.pid)}</select>`:''}`;
+  let body,foot;
+  if(promoNew){
+    const sel=[...C.recips].map(contactById).filter(Boolean),em=sel.filter(x=>x.email),dm=sel.filter(x=>!x.email);
+    body=`<div class="lbl">A chi<span class="hint">${sel.length?sel.length+(sel.length===1?' selezionato':' selezionati'):'scegli uno o più contatti'}</span></div>
+      ${S.promo.contacts.length?`<div class="rlist">${recipRows()}</div>`:'<div class="autonote">La rubrica è vuota: aggiungi i DJ in Promo → Contatti.</div>'}
+      <div class="lbl">Link alla traccia</div><input class="field" id="cLink" value="${esc(C.link||'')}" placeholder="https://soundcloud.com/…/s-privato">
+      <div class="f2"><div><div class="lbl">Inviata il</div>${dateField('cDate',C.date,'Oggi')}</div>
+        <div><div class="lbl">Ricontatta il</div>${dateField('cFollow',C.followup,'Nessun promemoria')}</div></div>
+      <div class="lbl">Messaggio<span class="hint">modello «Promo» in ⚙︎ · puoi modificarlo</span></div>
+      ${em.length?`<input class="field" id="cSubj" value="${esc(C.subj||'')}" style="margin-bottom:8px">`:''}
+      <textarea class="msg" id="cMsg">${esc(C.msg||'')}</textarea>
+      ${em.length>1?`<div class="m-hint">Una sola mail con ${em.length} destinatari in Ccn: nessuno vede gli indirizzi degli altri.</div>`:''}
+      ${dm.length?`<div class="m-hint">${dm.length===1?'1 contatto non ha':dm.length+' contatti non hanno'} l'email: dopo ti aiuto a scrivergli su Instagram o SoundCloud.</div>`:''}`;
+    foot=`<button class="btn" data-csub="log">Registra soltanto</button>
+      <button class="btn primary" data-csub="open">${em.length?`${ICON.mail}Apri Mail${em.length>1?' (Ccn)':''} e registra`:`${ICON.send}Registra e continua`}</button>`;
+  }else{
+    const contactSel=fu?`<div class="picker">${avatar(c)}<b>${esc(c?c.name:'?')}</b><span class="mute">${esc(c?contactSub(c):'')}</span></div>`
+      :`<select class="field" id="cContact">${!C.cid?'<option value="" selected disabled>Scegli a chi…</option>':''}
+        ${S.promo.contacts.map(x=>`<option value="${x.id}"${x.id===C.cid?' selected':''}>${esc(x.name)}${x.type!=='label'?' · '+esc(CTYPES[x.type]):''}</option>`).join('')}
+        ${edit?'':`<option value="__new"${C.cid==='__new'?' selected':''}>＋ Nuovo contatto…</option>`}</select>`;
+    const addr=ADDR[C.channel];
+    body=`<div class="lbl">A chi</div>${contactSel}
+      ${C.cid==='__new'?`<div class="cf newc"><label>Nome<input class="field" id="ncName" value="${esc(C.ncName||'')}" placeholder="es. Nightshift Records"></label>
+        <label>Tipo<select class="field" id="ncType">${types(C.ncType||'label')}</select></label></div>`:''}
+      <div class="lbl">Canale</div>
+      <div class="seg2">${CH_ORDER.map(k=>`<button data-ch="${k}" class="${C.channel===k?'on':''}">${ICON[CH[k].i]}${esc(CH[k].l)}</button>`).join('')}</div>
+      <div class="f2">${addr?`<div><div class="lbl">${addr[0]}</div><input class="field" id="cAddr" value="${esc(C.addr||'')}" placeholder="${esc(addr[1])}"></div>`:''}
+        <div${addr?'':' style="grid-column:1/-1"'}><div class="lbl">Link alla traccia</div><input class="field" id="cLink" value="${esc(C.link||'')}" placeholder="https://soundcloud.com/…/s-privato"></div></div>
+      ${fu?`<div class="f2"><div><div class="lbl">Ricontatta di nuovo il</div>${dateField('cFollow',C.followup,'Nessun promemoria')}</div><div></div></div>`
+        :`<div class="f3"><div><div class="lbl">Inviata il</div>${dateField('cDate',C.date,'Oggi')}</div>
+        <div><div class="lbl">Ricontatta il</div>${dateField('cFollow',C.followup,'Nessun promemoria')}</div>
+        <div><div class="lbl">Esclusiva fino al</div>${dateField('cExcl',C.excl,'Nessuna esclusiva')}</div></div>`}
+      ${edit?`<div class="f2"><div><div class="lbl">Stato</div><select class="field" id="cStatus">${Object.entries(SST).map(([k,v])=>`<option value="${k}"${C.status===k?' selected':''}>${C.kind==='promo'&&k==='attesa'?'Inviata':v.l}</option>`).join('')}</select></div>
+        <div><div class="lbl">Risposta arrivata il</div>${dateField('cReplyDate',C.reply_date,'Nessuna risposta')}</div></div>
+        <div class="lbl">Cosa hanno risposto</div><textarea class="short" id="cReply" placeholder="${C.kind==='promo'?'«La suono sabato al club»':'«Ci piace, mandaci gli stem»'}">${esc(C.reply_note||'')}</textarea>
+        <div class="lbl">Note</div><textarea class="short" id="cNotes" placeholder="Versione mandata, accordi, promemoria…">${esc(C.notes||'')}</textarea>`
+      :`<div class="lbl">Messaggio<span class="hint">dai modelli in ⚙︎ · puoi modificarlo</span></div>
+        ${C.channel==='email'?`<input class="field" id="cSubj" value="${esc(C.subj||'')}" style="margin-bottom:8px">`:''}
+        <textarea class="msg" id="cMsg">${esc(C.msg||'')}</textarea>`}`;
+    foot=edit?`<button class="btn primary" data-csub="save">Salva</button>`
+      :`<button class="btn" data-csub="log">Registra soltanto</button>
+        <button class="btn primary" data-csub="open">${ICON[CH[C.channel].i]}${OPEN_LABEL[C.channel]} e registra</button>`;
+  }
+  $('#sendModal').innerHTML=`${head}${body}${composeWarnings()}
+    ${edit?'':`<div class="m-hint">L'app prepara il messaggio e registra l'invio: l'ultimo clic su «Invia» resta tuo.</div>`}
+    <div class="m-foot2">${edit?`<button class="btn danger" data-csub="delete">Elimina invio</button>`:''}<span class="grow"></span>
+      <button class="btn" data-closecompose>Annulla</button>${foot}</div>`;
+  const root=$('#sendModal');bindDates(root);
+  const list=root.querySelector('.rlist');if(list)list.scrollTop=prevScroll;
+  const on=(id,ev,fn)=>{const e=document.getElementById(id);if(e)e.addEventListener(ev,fn)};
+  on('cTrack','change',e=>{syncCompose();C.pid=e.target.value;const np=byId(C.pid);
+    if(!C.link)C.link=(np&&np.link)||(sendsOf(C.pid).find(s=>s.link)||{}).link||'';renderCompose()});
+  on('cContact','change',e=>{syncCompose();C.cid=e.target.value;C.channel=defaultChannel(contactById(C.cid));renderCompose()});
+  on('ncName','input',regenMsg);on('cLink','input',regenMsg);
+  on('cMsg','input',()=>{C.dirty=true});on('cSubj','input',()=>{C.dirty=true});
+  root.querySelectorAll('[data-rc]').forEach(cb=>cb.addEventListener('change',()=>{
+    syncCompose();cb.checked?C.recips.add(cb.dataset.rc):C.recips.delete(cb.dataset.rc);renderCompose()}));
+}
+function setComposeKind(kind){
+  const C=S.compose;if(!C||C.kind===kind)return;
+  syncCompose();
+  if(kind==='promo'){if(C.cid&&C.cid!=='__new')C.recips.add(C.cid);if(C.followup===addDays(S.promo.today,S.promo.settings.followup_days||14))C.followup=''}
+  else if(!C.followup)C.followup=addDays(S.promo.today,S.promo.settings.followup_days||14);
+  C.kind=kind;C.dirty=false;renderCompose();
+}
+function closeOv(id){$('#'+id).classList.remove('show');if(id==='ovSend')S.compose=null}
+
+async function saveAddr(cid){
+  const C=S.compose,c=contactById(cid),f=ADDR[C.channel]?C.channel:null;
+  const v=(C.addr||'').trim();
+  if(!c||!f||!v||v.replace(/^@/,'')===(c[f]||''))return;
+  const d=await api('/api/contact',{id:cid,[f]:v});Object.assign(c,d.contact);
+}
+async function submitPromo(how){
+  const C=S.compose;
+  if(!C.pid)throw new Error('Scegli la traccia');
+  const sel=[...C.recips].map(contactById).filter(Boolean);
+  if(!sel.length)throw new Error('Scegli almeno un contatto');
+  for(const c of sel)await api('/api/send',{project:C.pid,contact:c.id,kind:'promo',channel:viaOf(c)||'altro',link:C.link,date:C.date,followup:C.followup});
+  const em=sel.filter(c=>c.email),dm=sel.filter(c=>!c.email&&(c.instagram||/^https:\/\//i.test(c.soundcloud||'')));
+  let msg=`Promo registrata per ${sel.length} ${sel.length===1?'contatto':'contatti'}`;
+  if(how==='open'&&em.length){
+    // una sola mail, destinatari in Ccn: nessuno vede gli indirizzi degli altri
+    const bcc=em.map(c=>c.email).join(',');
+    await openLink(`mailto:?bcc=${encodeURIComponent(bcc).replace(/%40/g,'@').replace(/%2C/g,',')}&subject=${encodeURIComponent(C.subj||'')}&body=${encodeURIComponent(C.msg||'')}`);
+    msg+=' · mail aperta';
+  }
+  await load();
+  if(how==='open'&&dm.length){C.step='dm';C.dmList=dm.map(c=>c.id);C.dmDone=new Set();renderCompose();toast(msg);return}
+  closeOv('ovSend');toast(msg);
+}
+async function dmOne(id){
+  const C=S.compose,c=contactById(id);if(!C||!c)return;
+  const copying=copyText(C.dirty?C.msg:composeText(c.name).msg);  // subito, dentro il clic
+  const url=c.instagram?'https://ig.me/m/'+encodeURIComponent(c.instagram):/^https:\/\//i.test(c.soundcloud||'')?c.soundcloud:'';
+  try{
+    const ok=await copying;if(url)await openLink(url);
+    C.dmDone.add(id);renderCompose();toast(ok?`Messaggio per ${c.name} copiato: incollalo e invia`:'Copia il messaggio a mano');
+  }catch(e){toast(e.message)}
+}
+async function composeSubmit(how){
+  syncCompose();const C=S.compose;if(!C)return;
+  // la copia va fatta subito, dentro il clic: dopo, il browser potrebbe non permetterla
+  const copying=how==='open'&&C.kind!=='promo'&&C.channel!=='email'?copyText(C.msg||''):null;
+  try{
+    if(C.kind==='promo'&&C.mode==='new')return await submitPromo(how);
+    if(C.mode==='edit'){
+      if(how==='delete'){
+        if(!await ask('Eliminare questo invio dallo storico?','Elimina'))return;
+        await api('/api/send_delete',{id:C.sid});closeOv('ovSend');await load();toast('Invio eliminato');return;
+      }
+      await saveAddr(C.cid);
+      const d=await api('/api/send',{id:C.sid,contact:C.cid,channel:C.channel,link:C.link,date:C.date,followup:C.followup,
+        exclusive_until:C.excl,status:C.status,reply_date:C.reply_date,reply_note:C.reply_note,notes:C.notes});
+      closeOv('ovSend');await load();
+      toast(d.signed?`Firmata! «${d.send.title}» passa a Master${d.warning?' · '+d.warning:''}`:'Invio aggiornato');return;
+    }
+    if(!C.pid)throw new Error('Scegli la traccia');
+    let cid=C.cid;
+    if(!cid)throw new Error('Scegli a chi la mandi');
+    if(cid==='__new'){
+      if(!(C.ncName||'').trim())throw new Error('Scrivi il nome del nuovo contatto');
+      const d=await api('/api/contact',{name:C.ncName,type:C.ncType||'label'});
+      cid=C.cid=d.contact.id;S.promo.contacts.push(d.contact);C.addrFor=cid+'|'+C.channel;
+    }
+    await saveAddr(cid);
+    if(C.mode==='followup')await api('/api/send',{id:C.sid,add_followup:true,followup:C.followup,channel:C.channel,link:C.link});
+    else await api('/api/send',{project:C.pid,contact:cid,kind:C.kind,channel:C.channel,link:C.link,date:C.date,followup:C.followup,exclusive_until:C.excl});
+    let msg=C.mode==='followup'?'Follow-up registrato':'Invio registrato';
+    if(how==='open'){
+      const c=contactById(cid),addr=chAddr(c,C.channel);
+      if(C.channel==='email'){
+        if(addr){await openLink(`mailto:${encodeURIComponent(addr).replace(/%40/g,'@')}?subject=${encodeURIComponent(C.subj||'')}&body=${encodeURIComponent(C.msg||'')}`);msg+=' · mail aperta'}
+        else msg+=' · manca l\'email del contatto: mail non aperta';
+      }else{
+        const copied=await copying;
+        const url=C.channel==='instagram'?(addr?'https://ig.me/m/'+encodeURIComponent(addr):'https://www.instagram.com/direct/inbox/')
+          :/^https:\/\//i.test(addr||'')?addr:'';
+        if(url)await openLink(url);
+        msg+=copied?' · messaggio copiato, incollalo e invia':' · copia il messaggio a mano';
+      }
+    }
+    closeOv('ovSend');await load();toast(msg);
+  }catch(e){toast(e.message)}
+}
+
+function openNewContact(){
+  $('#cModal').innerHTML=`<h2>Nuovo contatto</h2><div class="small">Una label, un A&amp;R, un DJ o un promoter a cui mandi la musica.</div>
+    <div class="cf" style="margin-top:14px"><label>Nome<input class="field" id="nc2Name" placeholder="es. Nightshift Records"></label>
+      <label>Tipo<select class="field" id="nc2Type">${Object.entries(CTYPES).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select></label>
+      <label>Email<input class="field" id="nc2Email" placeholder="demo@label.com"></label>
+      <label>Instagram<input class="field" id="nc2Ig" placeholder="nomeutente"></label></div>
+    <div class="m-foot2"><span class="grow"></span><button class="btn" data-closec>Annulla</button><button class="btn primary" data-createc>Crea contatto</button></div>`;
+  $('#ovC').classList.add('show');setTimeout(()=>$('#nc2Name').focus(),30);
+}
+async function createContact(){
+  try{
+    const d=await api('/api/contact',{name:$('#nc2Name').value,type:$('#nc2Type').value,email:$('#nc2Email').value,instagram:$('#nc2Ig').value});
+    closeOv('ovC');if(S.mode!=='contacts')setMode('contacts');await load();openContact(d.contact.id);toast('Contatto creato');
+  }catch(e){toast(e.message)}
+}
+async function deleteContact(id){
+  const c=contactById(id);if(!c)return;
+  if(!await ask(`Eliminare «${c.name}» dalla rubrica?`,'Elimina'))return;
+  try{await api('/api/contact_delete',{id});closePanel();await load();toast('Contatto eliminato')}catch(e){toast(e.message)}
+}
+// conferma fatta in casa: nell'app per Mac le finestre confirm() del browser non compaiono
+function ask(text,ok){
+  return new Promise(res=>{
+    $('#qModal').innerHTML=`<h2 style="font-size:16px">${esc(text)}</h2><div class="small">Non si può annullare.</div>
+      <div class="m-foot2"><span class="grow"></span><button class="btn" id="qNo">Annulla</button><button class="btn primary" id="qYes" style="background:#ff453a;border-color:#ff453a">${esc(ok)}</button></div>`;
+    const done=v=>{$('#ovQ').classList.remove('show');res(v)};
+    $('#qNo').onclick=()=>done(false);$('#qYes').onclick=()=>done(true);
+    $('#ovQ').classList.add('show');
+  });
+}
 
 // ------------------------------------------------------------ eventi
 document.addEventListener('click',e=>{
@@ -1088,6 +2024,35 @@ document.addEventListener('click',e=>{
   if(t.closest('#menu')){const b=t.closest('[data-m]');if(b)menuAction(b);return}
   if(S.menuId)closeMenu();
   if(t.closest('#toast'))return;
+  // promo
+  if(x=t.closest('[data-mode]')){setMode(x.dataset.mode,x.dataset.pf);closeSide();return}
+  if(x=t.closest('[data-ptab]')){flushNotes();S.ptab=x.dataset.ptab;renderPanel();return}
+  if(x=t.closest('[data-sact]')){openCompose({sid:x.dataset.sid,mode:x.dataset.sact==='followup'?'followup':'edit'});return}
+  if(x=t.closest('[data-sedit]')){openCompose({sid:x.dataset.sedit,mode:'edit'});return}
+  if(x=t.closest('[data-new-send]')){openCompose({pid:x.dataset.newSend,fixedTrack:!!x.dataset.newSend});return}
+  if(x=t.closest('[data-new-promo]')){openCompose({pid:x.dataset.newPromo,fixedTrack:true,kind:'promo'});return}
+  if(x=t.closest('#sendModal [data-ck]')){setComposeKind(x.dataset.ck);return}
+  if(x=t.closest('[data-dm]')){dmOne(x.dataset.dm);return}
+  if(x=t.closest('[data-pk]')){S.promoKind=x.dataset.pk;renderToolbar();renderMain();return}
+  if(x=t.closest('#panel [data-kind]')){update(S.openId,{kind:x.dataset.kind});return}
+  if(x=t.closest('#panel [data-rk]')){update(S.openId,{release_kind:x.dataset.rk});return}
+  if(t.closest('[data-open-rlink]')){const v=($('#rlink')||{}).value||'';if(/^https:\/\//i.test(v.trim()))openLink(v.trim()).catch(e=>toast(e.message));else toast('Scrivi un link che inizi con https://');return}
+  if(t.closest('[data-publish]')){const p=byId(S.openId);if(p)update(p.id,{status:'rilasciata',release_date:p.release_date||S.promo.today}).then(r=>{if(r)toast(`«${p.name}» è uscita: spostata in Rilasciata`)});return}
+  if(x=t.closest('[data-new-send-c]')){openCompose({cid:x.dataset.newSendC});return}
+  if(t.closest('[data-new-contact]')){openNewContact();return}
+  if(x=t.closest('#tbAction')){x.dataset.action==='contact'?openNewContact():openCompose(S.promoKind==='promo'?{kind:'promo'}:{});return}
+  if(x=t.closest('#sendModal [data-ch]')){syncCompose();S.compose.channel=x.dataset.ch;renderCompose();return}
+  if(x=t.closest('[data-csub]')){composeSubmit(x.dataset.csub);return}
+  if(t.closest('[data-closecompose]')||t.id==='ovSend'){closeOv('ovSend');return}
+  if(t.closest('[data-closec]')||t.id==='ovC'){closeOv('ovC');return}
+  if(t.closest('[data-createc]')){createContact();return}
+  if(x=t.closest('[data-del-contact]')){deleteContact(x.dataset.delContact);return}
+  if(x=t.closest('#main [data-send]')){
+    const s=S.promo.sends.find(y=>y.id===x.dataset.send);
+    if(s&&byId(s.project))openPanel(s.project,'sends');else if(s)openCompose({sid:s.id,mode:'edit'});
+    return;
+  }
+  if(x=t.closest('#main [data-cid]')){openContact(x.dataset.cid);return}
   if(x=t.closest('[data-act]')){
     const host=x.closest('[data-id]'),id=host?host.dataset.id:S.openId,a=x.dataset.act;
     if(a==='play')openIn(id,'ableton');else if(a==='finder')openIn(id,'finder');
@@ -1095,7 +2060,7 @@ document.addEventListener('click',e=>{
     return;
   }
   if(x=t.closest('[data-view]')){S.view=x.dataset.view;store('view',S.view);render();markSel(true);return}
-  if(x=t.closest('[data-filter]')){S.filter=x.dataset.filter;closeSide();render();return}
+  if(x=t.closest('[data-filter]')){S.filter=x.dataset.filter;closeSide();setMode('tracks');return}
   if(x=t.closest('[data-alias]')){S.alias=x.dataset.alias;closeSide();render();return}
   if(x=t.closest('[data-toggle]')){toggleCol(x.dataset.toggle,!!x.closest('.collapsed'));return}
   if(x=t.closest('[data-sort]')){const k=x.dataset.sort,c=sortSpec();S.sort=k+':'+(c.k===k?-c.dir:(k==='mtime'||k==='bpm'?-1:1));store('sort',S.sort);renderToolbar();renderMain();return}
@@ -1117,19 +2082,21 @@ document.addEventListener('contextmenu',e=>{
 document.addEventListener('keydown',e=>{
   const a=document.activeElement,typing=isTyping(a),mod=e.metaKey||e.ctrlKey;
   if(mod&&e.key.toLowerCase()==='f'){e.preventDefault();$('#q').focus();$('#q').select();return}
-  if(mod&&e.key==='Enter'&&S.openId){e.preventDefault();openIn(S.openId,'ableton');return}
+  const ov=[...document.querySelectorAll('.overlay.show')].pop();  // la finestra aperta più in alto
+  if(mod&&e.key==='Enter'&&ov&&ov.id==='ovSend'){e.preventDefault();composeSubmit(S.compose&&S.compose.mode==='edit'?'save':'open');return}
+  if(mod&&e.key==='Enter'&&S.openId&&!ov){e.preventDefault();openIn(S.openId,'ableton');return}
   if(e.key==='Escape'){
     if(S.menuId)return closeMenu();
-    if($('#ovs').classList.contains('show'))return closeSettings();
+    if(ov){if(ov.id==='ovs')closeSettings();else if(ov.id==='ovQ')$('#qNo').click();else closeOv(ov.id);return}
     if(a===$('#q')&&S.q){S.q='';a.value='';renderToolbar();renderMain();return}
     if(typing)return a.blur();
     if(S.openId)return closePanel();
     return;
   }
-  if(typing||mod||e.altKey||$('#ovs').classList.contains('show'))return;
+  if(typing||mod||e.altKey||ov)return;
   if(e.key==='/'){e.preventDefault();$('#q').focus();return}
   if(S.openId&&/^[1-9]$/.test(e.key)){const s=S.statuses[+e.key-1];if(s)setStatus(S.openId,s.key);return}
-  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();closeMenu();move(e.key==='ArrowDown'?1:-1)}
+  if(S.mode==='tracks'&&(e.key==='ArrowDown'||e.key==='ArrowUp')){e.preventDefault();closeMenu();move(e.key==='ArrowDown'?1:-1)}
 });
 $('#q').addEventListener('input',e=>{S.q=e.target.value;renderToolbar();renderMain()});
 $('#sort').addEventListener('change',e=>{if(e.target.value){S.sort=e.target.value;store('sort',S.sort);renderMain()}});

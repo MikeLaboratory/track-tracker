@@ -5,3 +5,5 @@ Apps/
 __pycache__/
 _tracker_data.json
 _tracker_data.tmp
+_tracker_promo.tmp
+_tracker_promo.json

@@ -26,11 +26,19 @@ trap cleanup EXIT
 shot() { .build/snapshot "$url" "docs/screenshots/$1" 1600 960 "$2" }
 
 shot board.png "S.view='board'; render();"
-shot details.png "S.view='board'; render(); openPanel('Nova Echo/Midnight Run Project');"
+shot details.png "S.view='board'; render(); openPanel('Kairo/Moonlight (Kairo Edit)');"
 shot list.png "S.view='list'; render();
   const row = document.querySelector('[data-id=\"Kairo/Signal Fire\"]').getBoundingClientRect();
   openMenu('Kairo/Signal Fire', row.left + 300, row.top + row.height / 2);"
 shot stale.png "S.view='board'; S.filter='stale'; render();"
+shot promo.png "setMode('promo');"
+shot compose.png "S.view='board'; render(); openCompose({pid:'Kairo/Northern Lines',fixedTrack:true});
+  const c = document.getElementById('cContact'); c.value = 'nr'; c.dispatchEvent(new Event('change'));"
+shot contacts.png "setMode('contacts'); openContact('dc');"
+shot sends.png "S.view='board'; render(); openPanel('Kairo/Northern Lines','sends');"
+shot promo-djs.png "S.view='board'; render(); openCompose({pid:'Nova Echo/Daylight (Nova Echo Edit)',fixedTrack:true,kind:'promo'});
+  for (const id of ['ds','kb','nr']) { const cb = document.querySelector('[data-rc=\"' + id + '\"]'); cb.checked = true; cb.dispatchEvent(new Event('change')); }
+  const l = document.getElementById('cLink'); l.value = 'https://soundcloud.com/nova-echo/daylight-edit/s-anteprima'; l.dispatchEvent(new Event('input'));"
 
 # 2000 px di larghezza bastano e il README si carica più in fretta
 for f in docs/screenshots/*.png; do sips -Z 2000 "$f" >/dev/null; done
