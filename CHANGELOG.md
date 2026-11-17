@@ -10,6 +10,10 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+### Corretto
+- Nei contatti si può incollare il link del profilo Instagram (o «@nome»): l'app tiene il solo nome utente, così «Copia e apri Instagram» apre la chat giusta. I contatti già salvati vengono sistemati all'apertura.
+- Gli indirizzi SoundCloud e delle pagine demo scritti senza «https://» si aprono lo stesso.
+
 ## [1.2.0] — 2026-11-17
 
 ### Aggiunto

@@ -130,6 +130,25 @@ DEFAULT_TEMPLATES = {
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def instagram_handle(value):
+    """Dal link del profilo o da "@nome" ricava il solo nome utente (serve per aprire la chat)."""
+    v = (value or "").strip()
+    m = re.match(r"(?i)^(?:https?://)?(?:www\.|m\.)?instagram\.com/([^/?#]+)", v)
+    if m:
+        v = m.group(1)
+    return v.lstrip("@").strip("/")
+
+
+def web_address(value):
+    """"soundcloud.com/nome" diventa "https://soundcloud.com/nome": i link si aprono solo se iniziano con https://."""
+    v = (value or "").strip()
+    if v.lower().startswith("http://"):
+        v = "https://" + v[7:]
+    elif v and not v.lower().startswith("https://") and re.match(r"(?i)^[a-z0-9-]+(\.[a-z0-9-]+)+(/|$)", v):
+        v = "https://" + v
+    return v
+
+
 def load_promo():
     try:
         p = json.loads(PROMO_FILE.read_text(encoding="utf-8"))
@@ -142,6 +161,11 @@ def load_promo():
     t = s.setdefault("templates", {})
     for k, v in DEFAULT_TEMPLATES.items():
         t.setdefault(k, v)
+    # contatti salvati prima che l'app sapesse leggere i link incollati
+    for c in p["contacts"].values():
+        c["instagram"] = instagram_handle(c.get("instagram"))
+        c["soundcloud"] = web_address(c.get("soundcloud"))
+        c["website"] = web_address(c.get("website"))
     return p
 
 
@@ -515,7 +539,10 @@ def save_contact(body):
     if "name" in upd and not upd["name"]:
         raise ValueError("Il contatto deve avere un nome")
     if "instagram" in upd:
-        upd["instagram"] = upd["instagram"].lstrip("@")
+        upd["instagram"] = instagram_handle(upd["instagram"])
+    for f in ("soundcloud", "website"):
+        if f in upd:
+            upd[f] = web_address(upd[f])
     if "type" in body:
         if body["type"] not in CONTACT_TYPES:
             raise ValueError("Tipo di contatto non valido")
