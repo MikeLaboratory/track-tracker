@@ -10,6 +10,8 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+## [1.2.1] — 2026-11-17
+
 ### Corretto
 - Nei contatti si può incollare il link del profilo Instagram (o «@nome»): l'app tiene il solo nome utente, così «Copia e apri Instagram» apre la chat giusta. I contatti già salvati vengono sistemati all'apertura.
 - Gli indirizzi SoundCloud e delle pagine demo scritti senza «https://» si aprono lo stesso.
@@ -70,7 +72,8 @@ Prima versione con l'app per Mac.
 ### Sicurezza
 - Le altre pagine aperte nel browser non possono mandare comandi a Track Tracker.
 
-[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.0...HEAD
+[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/MikeLaboratory/track-tracker/releases/tag/v1.0.0
