@@ -1106,6 +1106,16 @@ body:not(.mode-promo) .promo-board-only{display:none}
 .via{display:inline-flex;gap:5px;align-items:center;font-size:11.5px;color:var(--mute);white-space:nowrap}
 .via svg{width:13px;height:13px}
 .relrow{display:flex;gap:6px}
+.cfilters{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin-top:16px}
+.fchips{display:flex;flex-wrap:wrap;gap:6px;margin-right:4px}
+.fchip{display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border:1px solid var(--line);border-radius:999px;color:var(--mute)}
+.fchip:hover{color:var(--text);border-color:var(--line2)}
+.fchip.on{background:#ffffff18;color:#fff;border-color:var(--line2)}
+.fchip b{font-weight:500;color:var(--dim);font-variant-numeric:tabular-nums}
+.cfnever{align-items:center;font-size:12.5px}
+button.genre{cursor:pointer}
+button.genre:hover{color:#fff;border-color:var(--line2)}
+.tbl th.nosort{cursor:default}
 .picker{display:flex;align-items:center;gap:9px;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
 
 /* stati vuoti */
@@ -1199,7 +1209,8 @@ const S={projects:[],statuses:[],settings:{stale_days:60},root:'',aliasN:0,loade
   alias:'__all',filter:'all',q:'',view:store('view')==='list'?'list':'board',sort:store('sort')||'mtime:-1',
   openId:null,menuId:null,pendingNotes:null,notesT:null,collapsed:storedSet('collapsed'),expanded:storedSet('expanded'),
   // promo: mode = tracks | promo | contacts
-  mode:'tracks',promoFilter:'all',promoKind:'all',ptab:'details',openContact:null,compose:null,
+  mode:'tracks',promoFilter:'all',promoKind:'all',
+  cf:{type:'all',genre:'',channel:'',never:false},csort:store('csort')||'name:1',ptab:'details',openContact:null,compose:null,
   promo:{contacts:[],sends:[],settings:{followup_days:14,templates:{}},today:''}};
 // prima apertura: "Rilasciata" fa da archivio, quindi parte compressa
 if(store('collapsed')===null)S.collapsed.add('rilasciata');
@@ -1372,8 +1383,8 @@ function renderToolbar(){
     return;
   }
   if(S.mode==='contacts'){
-    const n=contactList().length;
-    $('#title').textContent='Contatti';$('#count').textContent=n+(n===1?' contatto':' contatti');
+    const n=contactList().length,tot=S.promo.contacts.length;
+    $('#title').textContent='Contatti';$('#count').textContent=(n<tot?n+' di '+tot:n)+(tot===1?' contatto':' contatti');
     tb.innerHTML=ICON.plus+'Nuovo contatto';tb.dataset.action='contact';q.placeholder='Cerca contatti e generi';
     return;
   }
@@ -1724,10 +1735,31 @@ function sendCard(s){
     ${s.reply_note?`<div class="cnote">«${esc(s.reply_note)}»</div>`:''}</article>`;
 }
 
+// ------------------------------------------------------------ rubrica: filtri e ordinamento
+const CF_CHANNELS={email:'Con email',instagram:'Con Instagram',soundcloud:'Con SoundCloud',website:'Con pagina demo'};
+function contactStats(c){
+  const ss=S.promo.sends.filter(s=>s.contact===c.id),ans=ss.filter(s=>ANSWERED.includes(s.status)).length;
+  return {sends:ss.length,ans,rate:ss.length?ans/ss.length:-1,last:ss.reduce((a,s)=>s.date>a?s.date:a,'')};
+}
+const cfActive=()=>S.cf.type!=='all'||!!S.cf.genre||!!S.cf.channel||S.cf.never;
+// tutti i filtri tranne uno: serve per i conteggi accanto ai tipi
+function contactMatches(c,skipType){
+  const q=S.q.trim().toLowerCase(),f=S.cf;
+  if(!skipType&&f.type!=='all'&&c.type!==f.type)return false;
+  if(f.genre&&!(c.genres||[]).some(g=>g.toLowerCase()===f.genre.toLowerCase()))return false;
+  if(f.channel&&!c[f.channel])return false;
+  if(f.never&&S.promo.sends.some(s=>s.contact===c.id))return false;
+  return !q||[c.name,c.org,c.email,c.instagram,(c.genres||[]).join(' '),c.notes,CTYPES[c.type]].join(' ').toLowerCase().includes(q);
+}
 function contactList(){
-  const q=S.q.trim().toLowerCase();
-  return S.promo.contacts.filter(c=>!q||[c.name,c.org,c.email,c.instagram,(c.genres||[]).join(' '),c.notes,CTYPES[c.type]]
-    .join(' ').toLowerCase().includes(q));
+  const [k,d]=S.csort.split(':'),dir=+d||1,st=new Map(S.promo.contacts.map(c=>[c.id,contactStats(c)]));
+  const val=c=>k==='type'?(CTYPES[c.type]||'').toLowerCase():k==='genres'?((c.genres||[])[0]||'~').toLowerCase()
+    :k==='sends'?st.get(c.id).sends:k==='rate'?st.get(c.id).rate:k==='last'?st.get(c.id).last:c.name.toLowerCase();
+  return S.promo.contacts.filter(c=>contactMatches(c)).sort((a,b)=>{
+    const x=val(a),y=val(b);
+    const r=typeof x==='number'?x-y:String(x).localeCompare(String(y),'it');
+    return r*dir||a.name.localeCompare(b.name,'it');
+  });
 }
 function renderContacts(){
   const m=$('#main');
@@ -1735,19 +1767,34 @@ function renderContacts(){
     <div class="small" style="max-width:460px">Aggiungi le label, gli A&amp;R e i DJ a cui mandi la tua musica:
     ritrovi canali, note e lo storico di tutto quello che gli hai mandato.</div>
     <button class="btn primary" data-new-contact>${ICON.plus}Nuovo contatto</button></div>`;return}
-  const list=contactList();
-  if(!list.length){m.innerHTML='<div class="empty"><div class="big">Nessun contatto</div>Niente corrisponde alla ricerca.</div>';return}
-  m.innerHTML=`<table class="tbl"><thead><tr><th>Nome</th><th>Tipo</th><th>Canali</th><th>Generi</th><th class="num">Invii</th>
-    <th class="num">Risposte</th><th>Ultimo invio</th></tr></thead><tbody>`+list.map(c=>{
-    const ss=S.promo.sends.filter(s=>s.contact===c.id),ans=ss.filter(s=>ANSWERED.includes(s.status)).length;
-    const last=ss.reduce((a,s)=>s.date>a?s.date:a,'');
+  const f=S.cf,list=contactList(),[sk,sd]=S.csort.split(':');
+  const genres=[...new Set(S.promo.contacts.flatMap(c=>c.genres||[]).map(g=>g.trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'it'));
+  const typeCount=t=>S.promo.contacts.filter(c=>contactMatches(c,true)&&(t==='all'||c.type===t)).length;
+  const bar=`<div class="cfilters">
+    <div class="fchips">${[['all','Tutti'],...Object.entries(CTYPES)].map(([k,l])=>{const n=typeCount(k);
+      return n||k==='all'||f.type===k?`<button class="fchip${f.type===k?' on':''}" data-cft="${k}">${esc(l)}<b>${n}</b></button>`:''}).join('')}</div>
+    <select class="dd" id="cfGenre"><option value="">Tutti i generi</option>${genres.map(g=>`<option${g.toLowerCase()===(f.genre||'').toLowerCase()?' selected':''}>${esc(g)}</option>`).join('')}</select>
+    <select class="dd" id="cfChan"><option value="">Qualsiasi canale</option>${Object.entries(CF_CHANNELS).map(([k,l])=>`<option value="${k}"${f.channel===k?' selected':''}>${l}</option>`).join('')}</select>
+    <label class="check cfnever"><input type="checkbox" id="cfNever"${f.never?' checked':''}>Mai contattati</label>
+    ${cfActive()?`<button class="btn sm" data-cfreset>Azzera filtri</button>`:''}</div>`;
+  const th=(k,l,cls='')=>`<th class="${cls}" data-csort="${k}">${l}${sk===k?(+sd>0?' ↑':' ↓'):''}</th>`;
+  m.innerHTML=bar+(list.length?`<table class="tbl"><thead><tr>${th('name','Nome')}${th('type','Tipo')}<th class="nosort">Canali</th>${th('genres','Generi')}
+    ${th('sends','Invii','num')}${th('rate','Risposte','num')}${th('last','Ultimo invio')}</tr></thead><tbody>`+list.map(c=>{
+    const s=contactStats(c);
     const icons=[c.email&&ICON.mail,c.instagram&&ICON.ig,c.soundcloud&&ICON.cloud,c.website&&ICON.globe].filter(Boolean).join('');
     return `<tr class="row${c.id===S.openContact?' is-sel':''}" data-cid="${c.id}">
       <td><div class="who" style="margin:0">${avatar(c)}<b>${esc(c.name)}</b></div></td><td class="mute">${esc(contactSub(c))}</td>
-      <td><span class="icons">${icons}</span></td><td>${(c.genres||[]).map(g=>`<span class="genre">${esc(g)}</span>`).join('')}</td>
-      <td class="num">${ss.length}</td><td class="num rate">${ss.length?`${ans} <small>· ${Math.round(ans/ss.length*100)}%</small>`:'–'}</td>
-      <td class="nowrap">${last?agoDate(last):'–'}</td></tr>`;
-  }).join('')+'</tbody></table>';
+      <td><span class="icons">${icons}</span></td>
+      <td>${(c.genres||[]).map(g=>`<button class="genre" data-cfg="${esc(g)}" title="Mostra solo ${esc(g)}">${esc(g)}</button>`).join('')}</td>
+      <td class="num">${s.sends}</td><td class="num rate">${s.sends?`${s.ans} <small>· ${Math.round(s.rate*100)}%</small>`:'–'}</td>
+      <td class="nowrap">${s.last?agoDate(s.last):'–'}</td></tr>`;
+  }).join('')+'</tbody></table>'
+  :`<div class="empty" style="min-height:220px"><div class="big">Nessun contatto</div>Niente corrisponde ai filtri o alla ricerca.
+    <button class="btn" data-cfreset>Azzera filtri</button></div>`);
+  const g=$('#cfGenre'),ch=$('#cfChan'),nv=$('#cfNever');
+  g.addEventListener('change',()=>{S.cf.genre=g.value;renderToolbar();renderContacts()});
+  ch.addEventListener('change',()=>{S.cf.channel=ch.value;renderToolbar();renderContacts()});
+  nv.addEventListener('change',()=>{S.cf.never=nv.checked;renderToolbar();renderContacts()});
 }
 
 // ------------------------------------------------------------ promo: nuovo invio, ricontatta, modifica
@@ -2052,6 +2099,11 @@ document.addEventListener('click',e=>{
   if(S.menuId)closeMenu();
   if(t.closest('#toast'))return;
   // promo
+  if(x=t.closest('[data-csort]')){const k=x.dataset.csort,[ck,cd]=S.csort.split(':');
+    S.csort=k+':'+(ck===k?-(+cd||1):(k==='sends'||k==='rate'||k==='last'?-1:1));store('csort',S.csort);renderContacts();return}
+  if(x=t.closest('[data-cft]')){S.cf.type=x.dataset.cft;renderToolbar();renderContacts();return}
+  if(x=t.closest('[data-cfg]')){S.cf.genre=x.dataset.cfg;renderToolbar();renderContacts();return}
+  if(t.closest('[data-cfreset]')){S.cf={type:'all',genre:'',channel:'',never:false};S.q='';$('#q').value='';renderToolbar();renderContacts();return}
   if(x=t.closest('[data-mode]')){setMode(x.dataset.mode,x.dataset.pf);closeSide();return}
   if(x=t.closest('[data-ptab]')){flushNotes();S.ptab=x.dataset.ptab;renderPanel();return}
   if(x=t.closest('[data-sact]')){openCompose({sid:x.dataset.sid,mode:x.dataset.sact==='followup'?'followup':'edit'});return}

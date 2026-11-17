@@ -1,9 +1,13 @@
+# risultati della compilazione (si rifanno con Scripts/build-app.sh)
 .build/
 .swiftpm/
 Apps/
+
+# file di sistema e di Python
 .DS_Store
 __pycache__/
-_tracker_data.json
-_tracker_data.tmp
-_tracker_promo.tmp
-_tracker_promo.json
+
+# dati personali di Track Tracker: stati, note, contatti, invii e le loro copie di sicurezza.
+# Stanno nella cartella dei progetti e non devono mai finire su GitHub.
+_tracker_*.json
+_tracker_*.tmp

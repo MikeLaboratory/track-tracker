@@ -10,6 +10,10 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+### Aggiunto
+- Rubrica: colonne ordinabili con un clic (nome, tipo, generi, invii, risposte, ultimo invio); l'ordine scelto viene ricordato.
+- Rubrica: filtri per tipo (con i conteggi), genere, canale e "Mai contattati"; un clic su un genere nella tabella filtra per quel genere.
+
 ## [1.2.1] — 2026-11-17
 
 ### Corretto
