@@ -10,6 +10,9 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+### Corretto
+- La lente d'ingrandimento nel campo di ricerca è centrata e allineata al testo.
+
 ## [1.3.0] — 2026-11-17
 
 ### Aggiunto

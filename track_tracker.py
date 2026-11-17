@@ -891,10 +891,10 @@ svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke
 .ttl h1{font-size:17px;margin:0;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ttl span{color:var(--mute);font-size:12px;white-space:nowrap}
 .search{position:relative;display:flex;align-items:center}
-.search svg{position:absolute;left:9px;color:var(--dim);pointer-events:none}
+.search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--dim);pointer-events:none}
 .search input{width:250px;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 44px 6px 30px;outline:none;transition:border-color .15s,box-shadow .15s}
 .search input::placeholder{color:var(--dim)}
-.search kbd{position:absolute;right:8px;color:var(--dim);font:11px -apple-system,sans-serif;border:1px solid var(--line2);border-radius:4px;padding:0 4px;pointer-events:none}
+.search kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:var(--dim);font:11px -apple-system,sans-serif;border:1px solid var(--line2);border-radius:4px;padding:0 4px;pointer-events:none}
 .search input:focus,.field:focus,textarea:focus,.dd:focus{border-color:var(--accent);box-shadow:0 0 0 3px #0a84ff30}
 .dd{background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 8px;outline:none}
 .seg{display:inline-flex;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:2px}
