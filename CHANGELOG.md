@@ -10,6 +10,8 @@ Mentre lavori, scrivi le modifiche sotto "Non rilasciato": `Scripts/release.sh` 
 
 ## [Non rilasciato]
 
+## [1.3.0] — 2026-11-17
+
 ### Aggiunto
 - Rubrica: colonne ordinabili con un clic (nome, tipo, generi, invii, risposte, ultimo invio); l'ordine scelto viene ricordato.
 - Rubrica: filtri per tipo (con i conteggi), genere, canale e "Mai contattati"; un clic su un genere nella tabella filtra per quel genere.
@@ -76,7 +78,8 @@ Prima versione con l'app per Mac.
 ### Sicurezza
 - Le altre pagine aperte nel browser non possono mandare comandi a Track Tracker.
 
-[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.1...HEAD
+[Non rilasciato]: https://github.com/MikeLaboratory/track-tracker/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/MikeLaboratory/track-tracker/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/MikeLaboratory/track-tracker/compare/v1.0.0...v1.1.0

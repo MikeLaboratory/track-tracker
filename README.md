@@ -7,7 +7,7 @@
 **Sai sempre a che punto è ogni tua traccia.**<br>
 Una board per i progetti di Ableton Live, dalla prima idea all'invio alle label: stati, note, BPM, tracce ferme e promo, tutto in locale sul tuo Mac.
 
-![Versione](https://img.shields.io/badge/versione-1.2.1-1d1d1b?style=flat-square)
+![Versione](https://img.shields.io/badge/versione-1.3.0-1d1d1b?style=flat-square)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-1d1d1b?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-1d1d1b?style=flat-square&logo=python&logoColor=white)
 ![Ableton Live](https://img.shields.io/badge/Ableton%20Live-progetti%20.als-1d1d1b?style=flat-square)
